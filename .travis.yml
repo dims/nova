@@ -2,7 +2,6 @@ language: python
 env:
   - TOXENV=py34
   - TOXENV=py27
-  - TOXENV=functional
   - TOXENV=pep8
   - TOXENV=pip-missing-reqs
 install:
