@@ -9,4 +9,4 @@ env:
 install:
   - travis_retry pip install tox
 script:
-  - tox
+  - travis_retry tox
