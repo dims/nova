@@ -175,9 +175,9 @@ class ResourceTracker(object):
                   "MB", {'flavor': instance_type['memory_mb'],
                           'overhead': overhead['memory_mb']})
 
-        claim = claims.ResizeClaim(context, instance, instance_type,
-                                   image_meta, self, self.compute_node,
-                                   overhead=overhead, limits=limits)
+        claim = claims.MoveClaim(context, instance, instance_type,
+                                 image_meta, self, self.compute_node,
+                                 overhead=overhead, limits=limits)
 
         migration = self._create_migration(context, instance,
                                            instance_type)
@@ -234,8 +234,8 @@ class ResourceTracker(object):
         self._update(context.elevated())
 
     @utils.synchronized(COMPUTE_RESOURCE_SEMAPHORE)
-    def drop_resize_claim(self, context, instance, instance_type=None,
-                          image_meta=None, prefix='new_'):
+    def drop_move_claim(self, context, instance, instance_type=None,
+                        image_meta=None, prefix='new_'):
         """Remove usage for an incoming/outgoing migration."""
         if instance['uuid'] in self.tracked_migrations:
             migration, itype = self.tracked_migrations.pop(instance['uuid'])
@@ -348,14 +348,17 @@ class ResourceTracker(object):
         """Get the metrics from monitors and
         notify information to message bus.
         """
-        metrics = []
+        metrics = objects.MonitorMetricList()
         metrics_info = {}
         for monitor in self.monitors:
             try:
-                metrics += monitor.get_metrics(nodename=nodename)
+                monitor.add_metrics_to_list(metrics)
             except Exception:
                 LOG.warning(_LW("Cannot get the metrics from %s."), monitor)
-        if metrics:
+        # TODO(jaypipes): Remove this when compute_node.metrics doesn't need
+        # to be populated as a JSON-ified string.
+        metrics = metrics.to_list()
+        if len(metrics):
             metrics_info['nodename'] = nodename
             metrics_info['metrics'] = metrics
             metrics_info['host'] = self.host
