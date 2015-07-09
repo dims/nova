@@ -788,61 +788,44 @@ class ComputeManager(manager.Manager):
         the MIGRATING, RESIZE_MIGRATING, RESIZE_MIGRATED, RESIZE_FINISH
         task state or RESIZED vm state.
         """
-        our_host = self.host
+        filters = {
+            'source_compute': self.host,
+            'status': 'accepted',
+            'migration_type': 'evacuation',
+        }
+        evacuations = objects.MigrationList.get_by_filters(context, filters)
+        if not evacuations:
+            return
+        evacuations = {mig.instance_uuid: mig for mig in evacuations}
+
         filters = {'deleted': False}
         local_instances = self._get_instances_on_driver(context, filters)
-        for instance in local_instances:
-            if instance.host != our_host:
-                if (instance.task_state in [task_states.MIGRATING,
-                                            task_states.RESIZE_MIGRATING,
-                                            task_states.RESIZE_MIGRATED,
-                                            task_states.RESIZE_FINISH]
-                    or instance.vm_state in [vm_states.RESIZED]):
-                    LOG.debug('Will not delete instance as its host ('
-                              '%(instance_host)s) is not equal to our '
-                              'host (%(our_host)s) but its task state is '
-                              '(%(task_state)s) and vm state is '
-                              '(%(vm_state)s)',
-                              {'instance_host': instance.host,
-                               'our_host': our_host,
-                               'task_state': instance.task_state,
-                               'vm_state': instance.vm_state},
-                              instance=instance)
-                    continue
-                if not CONF.workarounds.destroy_after_evacuate:
-                    LOG.warning(_LW('Instance %(uuid)s appears to have been '
-                                    'evacuated from this host to %(host)s. '
-                                    'Not destroying it locally due to '
-                                    'config setting '
-                                    '"workarounds.destroy_after_evacuate". '
-                                    'If this is not correct, enable that '
-                                    'option and restart nova-compute.'),
-                                {'uuid': instance.uuid,
-                                 'host': instance.host})
-                    continue
-                LOG.info(_LI('Deleting instance as its host ('
-                             '%(instance_host)s) is not equal to our '
-                             'host (%(our_host)s).'),
-                         {'instance_host': instance.host,
-                          'our_host': our_host}, instance=instance)
-                try:
-                    network_info = self.network_api.get_instance_nw_info(
-                        context, instance)
-                    bdi = self._get_instance_block_device_info(context,
-                                                               instance)
-                    destroy_disks = not (self._is_instance_storage_shared(
-                                                            context, instance))
-                except exception.InstanceNotFound:
-                    network_info = network_model.NetworkInfo()
-                    bdi = {}
-                    LOG.info(_LI('Instance has been marked deleted already, '
-                                 'removing it from the hypervisor.'),
-                             instance=instance)
-                    # always destroy disks if the instance was deleted
-                    destroy_disks = True
-                self.driver.destroy(context, instance,
-                                    network_info,
-                                    bdi, destroy_disks)
+        evacuated = [inst for inst in local_instances
+                     if inst.uuid in evacuations]
+        for instance in evacuated:
+            migration = evacuations[instance.uuid]
+            LOG.info(_LI('Deleting instance as it has been evacuated from '
+                         'this host'), instance=instance)
+            try:
+                network_info = self.network_api.get_instance_nw_info(
+                    context, instance)
+                bdi = self._get_instance_block_device_info(context,
+                                                           instance)
+                destroy_disks = not (self._is_instance_storage_shared(
+                    context, instance))
+            except exception.InstanceNotFound:
+                network_info = network_model.NetworkInfo()
+                bdi = {}
+                LOG.info(_LI('Instance has been marked deleted already, '
+                             'removing it from the hypervisor.'),
+                         instance=instance)
+                # always destroy disks if the instance was deleted
+                destroy_disks = True
+            self.driver.destroy(context, instance,
+                                network_info,
+                                bdi, destroy_disks)
+            migration.status = 'completed'
+            migration.save()
 
     def _is_instance_storage_shared(self, context, instance, host=None):
         shared_storage = True
@@ -3706,7 +3689,10 @@ class ComputeManager(manager.Manager):
         if old_instance_type_id != new_instance_type_id:
             instance_type = instance.get_flavor('new')
             self._set_instance_info(instance, instance_type)
-            resize_instance = True
+            for key in ('root_gb', 'swap', 'ephemeral_gb'):
+                if old_instance_type[key] != instance_type[key]:
+                    resize_instance = True
+                    break
 
         # NOTE(tr3buchet): setup networks on destination host
         self.network_api.setup_networks_on_host(context, instance,
@@ -3741,7 +3727,7 @@ class ComputeManager(manager.Manager):
                                          block_device_info, power_on)
         except Exception:
             with excutils.save_and_reraise_exception():
-                if resize_instance:
+                if old_instance_type_id != new_instance_type_id:
                     self._set_instance_info(instance,
                                             old_instance_type)
 
@@ -4522,12 +4508,11 @@ class ComputeManager(manager.Manager):
         new_cinfo['serial'] = old_cinfo['serial']
         return (old_cinfo, new_cinfo)
 
-    def _swap_volume(self, context, instance, bdm, connector, old_volume_id,
-                                                              new_volume_id):
+    def _swap_volume(self, context, instance, bdm, connector,
+                     old_volume_id, new_volume_id, resize_to):
         mountpoint = bdm['device_name']
         failed = False
         new_cinfo = None
-        resize_to = 0
         try:
             old_cinfo, new_cinfo = self._init_volume_connection(context,
                                                                 new_volume_id,
@@ -4540,10 +4525,6 @@ class ComputeManager(manager.Manager):
                       "old: %(old_cinfo)s",
                       {'new_cinfo': new_cinfo, 'old_cinfo': old_cinfo},
                       contex=context, instance=instance)
-            old_vol_size = self.volume_api.get(context, old_volume_id)['size']
-            new_vol_size = self.volume_api.get(context, new_volume_id)['size']
-            if new_vol_size > old_vol_size:
-                resize_to = new_vol_size
             self.driver.swap_volume(old_cinfo, new_cinfo, instance, mountpoint,
                                     resize_to)
         except Exception:
@@ -4597,6 +4578,13 @@ class ComputeManager(manager.Manager):
         bdm = objects.BlockDeviceMapping.get_by_volume_id(
                 context, old_volume_id, instance_uuid=instance.uuid)
         connector = self.driver.get_volume_connector(instance)
+
+        resize_to = 0
+        old_vol_size = self.volume_api.get(context, old_volume_id)['size']
+        new_vol_size = self.volume_api.get(context, new_volume_id)['size']
+        if new_vol_size > old_vol_size:
+            resize_to = new_vol_size
+
         LOG.info(_LI('Swapping volume %(old_volume)s for %(new_volume)s'),
                   {'old_volume': old_volume_id, 'new_volume': new_volume_id},
                   context=context, instance=instance)
@@ -4604,7 +4592,8 @@ class ComputeManager(manager.Manager):
                                                          bdm,
                                                          connector,
                                                          old_volume_id,
-                                                         new_volume_id)
+                                                         new_volume_id,
+                                                         resize_to)
 
         save_volume_id = comp_ret['save_volume_id']
 
@@ -4616,8 +4605,11 @@ class ComputeManager(manager.Manager):
             'destination_type': 'volume',
             'snapshot_id': None,
             'volume_id': save_volume_id,
-            'volume_size': None,
             'no_device': None}
+
+        if resize_to:
+            values['volume_size'] = resize_to
+
         LOG.debug("swap_volume: Updating volume %(volume_id)s BDM record with "
                   "%(updates)s", {'volume_id': bdm.volume_id,
                                   'updates': values},

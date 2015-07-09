@@ -1247,6 +1247,7 @@ class API(base.Base):
                     self.volume_api.check_attach(context,
                                                  volume,
                                                  instance=instance)
+                    bdm.volume_size = volume.get('size')
                 except (exception.CinderConnectionFailed,
                         exception.InvalidVolume):
                     raise
@@ -1254,7 +1255,8 @@ class API(base.Base):
                     raise exception.InvalidBDMVolume(id=volume_id)
             elif snapshot_id is not None:
                 try:
-                    self.volume_api.get_snapshot(context, snapshot_id)
+                    snap = self.volume_api.get_snapshot(context, snapshot_id)
+                    bdm.volume_size = bdm.volume_size or snap.get('size')
                 except exception.CinderConnectionFailed:
                     raise
                 except Exception:
@@ -3271,6 +3273,21 @@ class API(base.Base):
         instance.task_state = task_states.REBUILDING
         instance.save(expected_task_state=[None])
         self._record_action_start(context, instance, instance_actions.EVACUATE)
+
+        # NOTE(danms): Create this as a tombstone for the source compute
+        # to find and cleanup. No need to pass it anywhere else.
+        migration = objects.Migration(context,
+                                      source_compute=instance.host,
+                                      source_node=instance.node,
+                                      instance_uuid=instance.uuid,
+                                      status='accepted',
+                                      migration_type='evacuation')
+        if host:
+            migration.dest_compute = host
+        migration.create()
+
+        compute_utils.notify_about_instance_usage(
+            self.notifier, context, instance, "evacuate")
 
         return self.compute_task_api.rebuild_instance(context,
                        instance=instance,

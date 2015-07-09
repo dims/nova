@@ -271,6 +271,26 @@ class _TestBlockDeviceMappingObject(object):
     def test_destroy_computecell(self):
         self._test_destroy_mocked(cell_type='compute')
 
+    def test_is_image_true(self):
+        bdm = objects.BlockDeviceMapping(context=self.context,
+                                         source_type='image')
+        self.assertTrue(bdm.is_image)
+
+    def test_is_image_false(self):
+        bdm = objects.BlockDeviceMapping(context=self.context,
+                                         source_type='snapshot')
+        self.assertFalse(bdm.is_image)
+
+    def test_is_volume_true(self):
+        bdm = objects.BlockDeviceMapping(context=self.context,
+                                         destination_type='volume')
+        self.assertTrue(bdm.is_volume)
+
+    def test_is_volume_false(self):
+        bdm = objects.BlockDeviceMapping(context=self.context,
+                                         destination_type='local')
+        self.assertFalse(bdm.is_volume)
+
 
 class TestBlockDeviceMappingObject(test_objects._LocalTest,
                                    _TestBlockDeviceMappingObject):

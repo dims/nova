@@ -365,7 +365,7 @@ class ComputeVolumeTestCase(BaseTestCase):
                 self.context, objects.Instance(),
                 fake_instance.fake_db_instance())
         self.stubs.Set(self.compute.volume_api, 'get', lambda *a, **kw:
-                       {'id': self.volume_id,
+                       {'id': self.volume_id, 'size': 4,
                         'attach_status': 'detached'})
         self.stubs.Set(self.compute.driver, 'get_volume_connector',
                        lambda *a, **kw: None)
@@ -530,6 +530,7 @@ class ComputeVolumeTestCase(BaseTestCase):
                 'snapshot_id': None,
                 'volume_id': self.volume_id,
                 'device_name': '/dev/vdb',
+                'volume_size': 55,
                 'delete_on_termination': False,
             })]
             prepped_bdm = self.compute._prep_block_device(
@@ -736,6 +737,7 @@ class ComputeVolumeTestCase(BaseTestCase):
                                          no_device=False,
                                          disk_bus='foo',
                                          device_type='disk',
+                                         volume_size=1,
                                          volume_id=1)
         host_volume_bdms = {'id': 1, 'device_name': '/dev/vdb',
                'connection_info': '{}', 'instance_uuid': instance['uuid'],
@@ -867,7 +869,7 @@ class ComputeVolumeTestCase(BaseTestCase):
 
     def test_validate_bdm(self):
         def fake_get(self, context, res_id):
-            return {'id': res_id}
+            return {'id': res_id, 'size': 4}
 
         def fake_check_attach(*args, **kwargs):
             pass
@@ -901,7 +903,6 @@ class ComputeVolumeTestCase(BaseTestCase):
                 'volume_id': volume_id,
                 'guest_format': None,
                 'boot_index': 1,
-                'volume_size': 6
             }, anon=True),
             fake_block_device.FakeDbBlockDeviceDict({
                 'device_name': '/dev/sda2',
@@ -910,8 +911,8 @@ class ComputeVolumeTestCase(BaseTestCase):
                 'snapshot_id': snapshot_id,
                 'device_type': 'disk',
                 'guest_format': None,
+                'volume_size': 6,
                 'boot_index': 0,
-                'volume_size': 4
             }, anon=True),
             fake_block_device.FakeDbBlockDeviceDict({
                 'device_name': '/dev/sda3',
@@ -929,6 +930,8 @@ class ComputeVolumeTestCase(BaseTestCase):
         # Make sure it passes at first
         self.compute_api._validate_bdm(self.context, instance,
                                        instance_type, mappings)
+        self.assertEqual(4, mappings[1].volume_size)
+        self.assertEqual(6, mappings[2].volume_size)
 
         # Boot sequence
         mappings[2].boot_index = 2
@@ -950,7 +953,6 @@ class ComputeVolumeTestCase(BaseTestCase):
                 'source_type': 'blank',
                 'destination_type': 'local',
                 'device_type': 'disk',
-                'volume_id': volume_id,
                 'guest_format': None,
                 'boot_index': -1,
                 'volume_size': 1
@@ -960,7 +962,6 @@ class ComputeVolumeTestCase(BaseTestCase):
                 'source_type': 'blank',
                 'destination_type': 'local',
                 'device_type': 'disk',
-                'volume_id': volume_id,
                 'guest_format': None,
                 'boot_index': -1,
                 'volume_size': 1
@@ -4349,7 +4350,7 @@ class ComputeTestCase(BaseTestCase):
         self.stubs.Set(network_api.API, 'migrate_instance_start', fake)
         self.stubs.Set(network_api.API, 'migrate_instance_finish', fake)
 
-    def _test_finish_resize(self, power_on):
+    def _test_finish_resize(self, power_on, resize_instance=True):
         # Contrived test to ensure finish_resize doesn't raise anything and
         # also tests resize from ACTIVE or STOPPED state which determines
         # if the resized instance is powered on or not.
@@ -4363,6 +4364,13 @@ class ComputeTestCase(BaseTestCase):
         image = 'fake-image'
         disk_info = 'fake-disk-info'
         instance_type = flavors.get_default_flavor()
+
+        if not resize_instance:
+            old_instance_type = flavors.get_flavor_by_name('m1.tiny')
+            instance_type['root_gb'] = old_instance_type['root_gb']
+            instance_type['swap'] = old_instance_type['swap']
+            instance_type['ephemeral_gb'] = old_instance_type['ephemeral_gb']
+
         instance.task_state = task_states.RESIZE_PREP
         instance.save()
         self.compute.prep_resize(self.context, instance=instance,
@@ -4462,7 +4470,7 @@ class ComputeTestCase(BaseTestCase):
         self.compute.driver.finish_migration(self.context, migration,
                                              instance, disk_info,
                                              'fake-nwinfo1',
-                                             image, True,
+                                             image, resize_instance,
                                              'fake-bdminfo', power_on)
         # Ensure instance status updates is after the migration finish
         migration.save().WithSideEffects(_mig_save)
@@ -4485,6 +4493,9 @@ class ComputeTestCase(BaseTestCase):
     def test_finish_resize_from_stopped(self):
         self._test_finish_resize(power_on=False)
 
+    def test_finish_resize_without_resize_instance(self):
+        self._test_finish_resize(power_on=True, resize_instance=False)
+
     def test_finish_resize_with_volumes(self):
         """Contrived test to ensure finish_resize doesn't raise anything."""
 
@@ -4496,6 +4507,7 @@ class ComputeTestCase(BaseTestCase):
         volume = {'instance_uuid': None,
                   'device_name': None,
                   'id': volume_id,
+                  'size': 200,
                   'attach_status': 'detached'}
         bdm = objects.BlockDeviceMapping(
                         **{'context': self.context,
@@ -6520,7 +6532,10 @@ class ComputeTestCase(BaseTestCase):
         instance = self._create_fake_instance_obj(params)
         self.compute._instance_update(self.context, instance.uuid, vcpus=4)
 
-    def test_destroy_evacuated_instance_on_shared_storage(self):
+    @mock.patch('nova.objects.MigrationList.get_by_filters')
+    @mock.patch('nova.objects.Migration.save')
+    def test_destroy_evacuated_instance_on_shared_storage(self, mock_save,
+                                                          mock_get):
         fake_context = context.get_admin_context()
 
         # instances in central db
@@ -6537,6 +6552,9 @@ class ComputeTestCase(BaseTestCase):
         # those are already been evacuated to other host
         evacuated_instance = self._create_fake_instance_obj(
             {'host': 'otherhost'})
+
+        migration = objects.Migration(instance_uuid=evacuated_instance.uuid)
+        mock_get.return_value = [migration]
 
         instances.append(evacuated_instance)
 
@@ -6565,8 +6583,15 @@ class ComputeTestCase(BaseTestCase):
 
         self.mox.ReplayAll()
         self.compute._destroy_evacuated_instances(fake_context)
+        mock_get.assert_called_once_with(fake_context,
+                                         {'source_compute': self.compute.host,
+                                          'status': 'accepted',
+                                          'migration_type': 'evacuation'})
 
-    def test_destroy_evacuated_instance_with_disks(self):
+    @mock.patch('nova.objects.MigrationList.get_by_filters')
+    @mock.patch('nova.objects.Migration.save')
+    def test_destroy_evacuated_instance_with_disks(self, mock_save,
+                                                   mock_get):
         fake_context = context.get_admin_context()
 
         # instances in central db
@@ -6583,6 +6608,9 @@ class ComputeTestCase(BaseTestCase):
         # those are already been evacuated to other host
         evacuated_instance = self._create_fake_instance_obj(
             {'host': 'otherhost'})
+
+        migration = objects.Migration(instance_uuid=evacuated_instance.uuid)
+        mock_get.return_value = [migration]
 
         instances.append(evacuated_instance)
 
@@ -6621,7 +6649,10 @@ class ComputeTestCase(BaseTestCase):
         self.mox.ReplayAll()
         self.compute._destroy_evacuated_instances(fake_context)
 
-    def test_destroy_evacuated_instance_not_implemented(self):
+    @mock.patch('nova.objects.MigrationList.get_by_filters')
+    @mock.patch('nova.objects.Migration.save')
+    def test_destroy_evacuated_instance_not_implemented(self, mock_save,
+                                                        mock_get):
         fake_context = context.get_admin_context()
 
         # instances in central db
@@ -6638,6 +6669,9 @@ class ComputeTestCase(BaseTestCase):
         # those are already been evacuated to other host
         evacuated_instance = self._create_fake_instance_obj(
             {'host': 'otherhost'})
+
+        migration = objects.Migration(instance_uuid=evacuated_instance.uuid)
+        mock_get.return_value = [migration]
 
         instances.append(evacuated_instance)
 
@@ -9791,6 +9825,13 @@ class ComputeAPITestCase(BaseTestCase):
         instance.refresh()
         self.assertEqual(instance.task_state, task_states.REBUILDING)
         self.assertEqual(instance.host, 'fake_dest_host')
+        migs = objects.MigrationList.get_by_filters(
+            self.context, {'source_host': 'fake_host'})
+        self.assertEqual(1, len(migs))
+        self.assertEqual('fake_host', migs[0].source_compute)
+        self.assertEqual('accepted', migs[0].status)
+        self.assertEqual('compute.instance.evacuate',
+                         fake_notifier.NOTIFICATIONS[0].event_type)
 
     def test_fail_evacuate_from_non_existing_host(self):
         inst = {}
