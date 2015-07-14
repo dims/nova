@@ -1098,10 +1098,9 @@ class LibvirtDriver(driver.ComputeDriver):
             with excutils.save_and_reraise_exception():
                 self._disconnect_volume(connection_info, disk_dev)
 
-    def _swap_volume(self, domain, disk_path, new_path, resize_to):
+    def _swap_volume(self, guest, disk_path, new_path, resize_to):
         """Swap existing disk with a new block device."""
-        # TODO(sahid): Should pass a guest to this method.
-        guest = libvirt_guest.Guest(domain)
+        dev = guest.get_block_device(disk_path)
 
         # Save a copy of the domain's persistent XML file
         xml = guest.get_xml_desc(dump_inactive=True, dump_sensitive=True)
@@ -1109,7 +1108,7 @@ class LibvirtDriver(driver.ComputeDriver):
         # Abort is an idempotent operation, so make sure any block
         # jobs which may have failed are ended.
         try:
-            domain.blockJobAbort(disk_path, 0)
+            dev.abort_job()
         except Exception:
             pass
 
@@ -1123,23 +1122,22 @@ class LibvirtDriver(driver.ComputeDriver):
 
             # Start copy with VIR_DOMAIN_REBASE_REUSE_EXT flag to
             # allow writing to existing external volume file
-            domain.blockRebase(disk_path, new_path, 0,
-                               libvirt.VIR_DOMAIN_BLOCK_REBASE_COPY |
-                               libvirt.VIR_DOMAIN_BLOCK_REBASE_REUSE_EXT)
+            dev.rebase(new_path, copy=True, reuse_ext=True)
 
-            while self._wait_for_block_job(domain, disk_path):
+            # TODO(sahid): This method needs to be implemented in Guest
+            # a future patch will come.
+            while self._wait_for_block_job(guest._domain, disk_path):
                 time.sleep(0.5)
 
-            domain.blockJobAbort(disk_path,
-                                 libvirt.VIR_DOMAIN_BLOCK_JOB_ABORT_PIVOT)
+            dev.abort_job(pivot=True)
             if resize_to:
                 # NOTE(alex_xu): domain.blockJobAbort isn't sync call. This
                 # is bug in libvirt. So we need waiting for the pivot is
                 # finished. libvirt bug #1119173
-                while self._wait_for_block_job(domain, disk_path,
+                while self._wait_for_block_job(guest._domain, disk_path,
                                                wait_for_job_clean=True):
                     time.sleep(0.5)
-                domain.blockResize(disk_path, resize_to * units.Gi / units.Ki)
+                dev.resize(resize_to * units.Gi / units.Ki)
         finally:
             self._host.write_instance_config(xml)
 
@@ -1148,10 +1146,6 @@ class LibvirtDriver(driver.ComputeDriver):
 
         guest = self._host.get_guest(instance)
 
-        # TODO(sahid): We are converting all calls from a
-        # virDomain object to use nova.virt.libvirt.Guest.
-        # We should be able to remove virt_dom at the end.
-        virt_dom = guest._domain
         disk_dev = mountpoint.rpartition("/")[2]
         if not guest.get_disk(disk_dev):
             raise exception.DiskNotFound(location=disk_dev)
@@ -1175,7 +1169,7 @@ class LibvirtDriver(driver.ComputeDriver):
         driver_bdm['connection_info'] = new_connection_info
         driver_bdm.save()
 
-        self._swap_volume(virt_dom, disk_dev, conf.source_path, resize_to)
+        self._swap_volume(guest, disk_dev, conf.source_path, resize_to)
         self._disconnect_volume(old_connection_info, disk_dev)
 
     def _get_existing_domain_xml(self, instance, network_info,
@@ -1403,7 +1397,7 @@ class LibvirtDriver(driver.ComputeDriver):
                 if live_snapshot:
                     # NOTE(xqueralt): libvirt needs o+x in the temp directory
                     os.chmod(tmpdir, 0o701)
-                    self._live_snapshot(context, instance, virt_dom, disk_path,
+                    self._live_snapshot(context, instance, guest, disk_path,
                                         out_path, image_format, image_meta)
                 else:
                     snapshot_backend.snapshot_extract(out_path, image_format)
@@ -1519,11 +1513,10 @@ class LibvirtDriver(driver.ComputeDriver):
         """Thaw the guest filesystems after snapshot."""
         self._set_quiesced(context, instance, image_meta, False)
 
-    def _live_snapshot(self, context, instance, domain, disk_path, out_path,
+    def _live_snapshot(self, context, instance, guest, disk_path, out_path,
                        image_format, image_meta):
         """Snapshot an instance without downtime."""
-        # TODO(sahid): Should pass a guest to this method
-        guest = libvirt_guest.Guest(domain)
+        dev = guest.get_block_device(disk_path)
 
         # Save a copy of the domain's persistent XML file
         xml = guest.get_xml_desc(dump_inactive=True, dump_sensitive=True)
@@ -1531,7 +1524,7 @@ class LibvirtDriver(driver.ComputeDriver):
         # Abort is an idempotent operation, so make sure any block
         # jobs which may have failed are ended.
         try:
-            domain.blockJobAbort(disk_path, 0)
+            dev.abort_job()
         except Exception:
             pass
 
@@ -1562,15 +1555,12 @@ class LibvirtDriver(driver.ComputeDriver):
 
             # NOTE (rmk): Establish a temporary mirror of our root disk and
             #             issue an abort once we have a complete copy.
-            domain.blockRebase(disk_path, disk_delta, 0,
-                               libvirt.VIR_DOMAIN_BLOCK_REBASE_COPY |
-                               libvirt.VIR_DOMAIN_BLOCK_REBASE_REUSE_EXT |
-                               libvirt.VIR_DOMAIN_BLOCK_REBASE_SHALLOW)
+            dev.rebase(disk_delta, copy=True, reuse_ext=True, shallow=True)
 
-            while self._wait_for_block_job(domain, disk_path):
+            while self._wait_for_block_job(guest._domain, disk_path):
                 time.sleep(0.5)
 
-            domain.blockJobAbort(disk_path, 0)
+            dev.abort_job()
             libvirt_utils.chown(disk_delta, os.getuid())
         finally:
             self._host.write_instance_config(xml)
