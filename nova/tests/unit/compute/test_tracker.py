@@ -335,7 +335,6 @@ def setup_rt(hostname, nodename, virt_resources=_VIRT_DRIVER_AVAIL_RESOURCES,
                               return overhead of memory given an instance
                               object. Defaults to returning zero overhead.
     """
-    cond_api_mock = mock.MagicMock()
     sched_client_mock = mock.MagicMock()
     notifier_mock = mock.MagicMock()
     vd = mock.MagicMock()
@@ -345,7 +344,6 @@ def setup_rt(hostname, nodename, virt_resources=_VIRT_DRIVER_AVAIL_RESOURCES,
     vd.estimate_instance_overhead.side_effect = estimate_overhead
 
     with contextlib.nested(
-            mock.patch('nova.conductor.API', return_value=cond_api_mock),
             mock.patch('nova.scheduler.client.SchedulerClient',
                        return_value=sched_client_mock),
             mock.patch('nova.rpc.get_notifier', return_value=notifier_mock)):
@@ -365,7 +363,6 @@ class BaseTestCase(test.NoDBTestCase):
         (self.rt, self.sched_client_mock,
          self.driver_mock) = setup_rt(
                  'fake-host', 'fake-node', virt_resources, estimate_overhead)
-        self.cond_api_mock = self.rt.conductor_api
 
 
 class TestUpdateAvailableResources(BaseTestCase):
@@ -806,13 +803,13 @@ class TestUpdateAvailableResources(BaseTestCase):
 
 class TestInitComputeNode(BaseTestCase):
 
+    @mock.patch('nova.objects.ComputeNode.create')
+    @mock.patch('nova.objects.Service.get_by_compute_host')
     @mock.patch('nova.objects.ComputeNode.get_by_host_and_nodename')
-    def test_no_op_init_compute_node(self, get_mock):
+    def test_no_op_init_compute_node(self, get_mock, service_mock,
+                                     create_mock):
         self._setup_rt()
 
-        capi = self.cond_api_mock
-        service_mock = capi.service_get_by_compute_host
-        create_mock = capi.compute_node_create
         resources = copy.deepcopy(_VIRT_DRIVER_AVAIL_RESOURCES)
         compute_node = copy.deepcopy(_COMPUTE_NODE_FIXTURES[0])
         self.rt.compute_node = compute_node
@@ -836,19 +833,18 @@ class TestInitComputeNode(BaseTestCase):
         self.assertTrue(self.rt.disabled)
         self.assertIsNone(self.rt.compute_node)
 
+    @mock.patch('nova.objects.ComputeNode.create')
     @mock.patch('nova.objects.Service.get_by_compute_host')
     @mock.patch('nova.objects.ComputeNode.get_by_host_and_nodename')
-    def test_compute_node_loaded(self, get_mock, service_mock):
+    def test_compute_node_loaded(self, get_mock, service_mock, create_mock):
         self._setup_rt()
 
         def fake_get_node(_ctx, host, node):
             res = copy.deepcopy(_COMPUTE_NODE_FIXTURES[0])
             return res
 
-        capi = self.cond_api_mock
         service_mock.return_value = _SERVICE_FIXTURE
         get_mock.side_effect = fake_get_node
-        create_mock = capi.compute_node_create
         resources = copy.deepcopy(_VIRT_DRIVER_AVAIL_RESOURCES)
 
         self.rt._init_compute_node(mock.sentinel.ctx, resources)

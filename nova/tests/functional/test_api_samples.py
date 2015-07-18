@@ -23,7 +23,6 @@ from oslo_serialization import jsonutils
 from oslo_utils import importutils
 import testtools
 
-from nova.api.metadata import password
 # Import extensions to pull in osapi_compute_extension CONF option used below.
 from nova.console import manager as console_manager  # noqa - only for cfg
 from nova.network.neutronv2 import api as neutron_api  # noqa - only for cfg
@@ -248,22 +247,6 @@ class UsedLimitsForAdminSamplesJsonTest(ApiSampleTestBaseV2):
                                      response, 200)
 
 
-class AvailabilityZoneJsonTest(ServersSampleBase):
-    extension_name = ("nova.api.openstack.compute.contrib.availability_zone."
-                      "Availability_zone")
-
-    def test_create_availability_zone(self):
-        subs = {
-            'image_id': fake.get_valid_image_id(),
-            'host': self._get_host(),
-            "availability_zone": "nova"
-        }
-        response = self._do_post('servers', 'availability-zone-post-req', subs)
-        subs.update(self._get_regexes())
-        self._verify_response('availability-zone-post-resp', subs,
-                              response, 202)
-
-
 class ExtendedIpsSampleJsonTests(ServersSampleBase):
     extension_name = ("nova.api.openstack.compute.contrib"
                       ".extended_ips.Extended_ips")
@@ -338,34 +321,6 @@ class ExtendedVIFNetSampleJsonTests(ServersSampleBase):
         self._verify_response('vifs-list-resp', subs, response, 200)
 
 
-class ServerPasswordSampleJsonTests(ServersSampleBase):
-    extension_name = ("nova.api.openstack.compute.contrib.server_password."
-                      "Server_password")
-
-    def test_get_password(self):
-
-        # Mock password since there is no api to set it
-        def fake_ext_password(*args, **kwargs):
-            return ("xlozO3wLCBRWAa2yDjCCVx8vwNPypxnypmRYDa/zErlQ+EzPe1S/"
-                    "Gz6nfmC52mOlOSCRuUOmG7kqqgejPof6M7bOezS387zjq4LSvvwp"
-                    "28zUknzy4YzfFGhnHAdai3TxUJ26pfQCYrq8UTzmKF2Bq8ioSEtV"
-                    "VzM0A96pDh8W2i7BOz6MdoiVyiev/I1K2LsuipfxSJR7Wdke4zNX"
-                    "JjHHP2RfYsVbZ/k9ANu+Nz4iIH8/7Cacud/pphH7EjrY6a4RZNrj"
-                    "QskrhKYed0YERpotyjYk1eDtRe72GrSiXteqCM4biaQ5w3ruS+Ac"
-                    "X//PXk3uJ5kC7d67fPXaVz4WaQRYMg==")
-        self.stubs.Set(password, "extract_password", fake_ext_password)
-        uuid = self._post_server()
-        response = self._do_get('servers/%s/os-server-password' % uuid)
-        subs = self._get_regexes()
-        subs['encrypted_password'] = fake_ext_password().replace('+', '\\+')
-        self._verify_response('get-password-resp', subs, response, 200)
-
-    def test_reset_password(self):
-        uuid = self._post_server()
-        response = self._do_delete('servers/%s/os-server-password' % uuid)
-        self.assertEqual(response.status_code, 204)
-
-
 class BlockDeviceMappingV2BootJsonTest(ServersSampleBase):
     extension_name = ('nova.api.openstack.compute.contrib.'
                       'block_device_mapping_v2_boot.'
@@ -384,26 +339,6 @@ class BlockDeviceMappingV2BootJsonTest(ServersSampleBase):
         self.stubs.Set(cinder.API, 'check_attach',
                        fakes.stub_volume_check_attach)
         return self._post_server()
-
-
-class ExtendedAvailabilityZoneJsonTests(ServersSampleBase):
-    extension_name = ("nova.api.openstack.compute.contrib"
-                                ".extended_availability_zone"
-                                ".Extended_availability_zone")
-
-    def test_show(self):
-        uuid = self._post_server()
-        response = self._do_get('servers/%s' % uuid)
-        subs = self._get_regexes()
-        subs['hostid'] = '[a-f0-9]+'
-        self._verify_response('server-get-resp', subs, response, 200)
-
-    def test_detail(self):
-        self._post_server()
-        response = self._do_get('servers/detail')
-        subs = self._get_regexes()
-        subs['hostid'] = '[a-f0-9]+'
-        self._verify_response('servers-detail-resp', subs, response, 200)
 
 
 class ServerGroupQuotas_LimitsSampleJsonTest(LimitsSampleJsonTest):

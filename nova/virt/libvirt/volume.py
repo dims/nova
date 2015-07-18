@@ -106,12 +106,15 @@ volume_opts = [
                help='Path to a Quobyte Client configuration file.'),
     cfg.StrOpt('iscsi_iface',
                deprecated_name='iscsi_transport',
-               choices=('be2iscsi', 'bnx2i', 'cxgb3i', 'cxgb4i', 'qla4xxx',
-                        'ocs'),
                help='The iSCSI transport iface to use to connect to target in '
-                    'case offload support is desired. Default format is '
-                    'transport_name.hwaddress and can be generated manually '
-                    'or via iscsiadm -m iface'),
+                    'case offload support is desired. Default format is of '
+                    'the form <transport_name>.<hwaddress> where '
+                    '<transport_name> is one of (be2iscsi, bnx2i, cxgb3i, '
+                    'cxgb4i, qla4xxx, ocs) and <hwadress> is the MAC address '
+                    'of the interface and can be generated via the '
+                    'iscsiadm -m iface command. Do not confuse the '
+                    'iscsi_iface parameter to be provided here with the '
+                    'actual transport name.'),
                     # iser is also supported, but use LibvirtISERVolumeDriver
                     # instead
     ]
@@ -1460,7 +1463,7 @@ class LibvirtScalityVolumeDriver(LibvirtBaseVolumeDriver):
         # config is mandatory
         config = CONF.libvirt.scality_sofs_config
         if not config:
-            msg = _LW("Value required for 'scality_sofs_config'")
+            msg = _("Value required for 'scality_sofs_config'")
             LOG.warn(msg)
             raise exception.NovaException(msg)
 
@@ -1471,13 +1474,13 @@ class LibvirtScalityVolumeDriver(LibvirtBaseVolumeDriver):
         try:
             urllib.request.urlopen(config, timeout=5).close()
         except urllib.error.URLError as e:
-            msg = _LW("Cannot access 'scality_sofs_config': %s") % e
+            msg = _("Cannot access 'scality_sofs_config': %s") % e
             LOG.warn(msg)
             raise exception.NovaException(msg)
 
         # mount.sofs must be installed
         if not os.access('/sbin/mount.sofs', os.X_OK):
-            msg = _LW("Cannot execute /sbin/mount.sofs")
+            msg = _("Cannot execute /sbin/mount.sofs")
             LOG.warn(msg)
             raise exception.NovaException(msg)
 
@@ -1492,7 +1495,7 @@ class LibvirtScalityVolumeDriver(LibvirtBaseVolumeDriver):
             utils.execute('mount', '-t', 'sofs', config, mount_path,
                           run_as_root=True)
         if not os.path.isdir(sysdir):
-            msg = _LW("Cannot mount Scality SOFS, check syslog for errors")
+            msg = _("Cannot mount Scality SOFS, check syslog for errors")
             LOG.warn(msg)
             raise exception.NovaException(msg)
 

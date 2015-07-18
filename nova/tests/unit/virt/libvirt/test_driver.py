@@ -3491,6 +3491,8 @@ class LibvirtConnTestCase(test.NoDBTestCase):
                          cfg.system_serial)
         self.assertEqual(instance_ref['uuid'],
                          cfg.system_uuid)
+        self.assertEqual("Virtual Machine",
+                         cfg.system_family)
 
     def test_get_guest_config_sysinfo_serial_none(self):
         self.flags(sysinfo_serial="none", group="libvirt")
@@ -13297,7 +13299,7 @@ class LibvirtVolumeSnapshotTestCase(test.NoDBTestCase):
         self.drvr._host.get_domain(instance).AndReturn(domain)
         self.drvr._host.has_min_version(mox.IgnoreArg()).AndReturn(True)
 
-        domain.blockRebase('vda', 'snap.img', 0, 0)
+        domain.blockRebase('vda', 'snap.img', 0, flags=0)
 
         domain.blockJobInfo('vda', 0).AndReturn({'cur': 1, 'end': 1000})
         domain.blockJobInfo('vda', 0).AndReturn({'cur': 1000, 'end': 1000})
@@ -13319,20 +13321,21 @@ class LibvirtVolumeSnapshotTestCase(test.NoDBTestCase):
         snapshot_id = 'snapshot-1234'
 
         domain = FakeVirtDomain(fake_xml=self.dom_xml)
+        guest = libvirt_guest.Guest(domain)
         self.mox.StubOutWithMock(domain, 'XMLDesc')
         domain.XMLDesc(flags=0).AndReturn(self.dom_xml)
 
-        self.mox.StubOutWithMock(self.drvr._host, 'get_domain')
+        self.mox.StubOutWithMock(self.drvr._host, 'get_guest')
         self.mox.StubOutWithMock(self.drvr._host, 'has_min_version')
         self.mox.StubOutWithMock(domain, 'blockRebase')
         self.mox.StubOutWithMock(domain, 'blockCommit')
         self.mox.StubOutWithMock(domain, 'blockJobInfo')
 
-        self.drvr._host.get_domain(instance).AndReturn(domain)
+        self.drvr._host.get_guest(instance).AndReturn(guest)
         self.drvr._host.has_min_version(mox.IgnoreArg()).AndReturn(True)
 
         domain.blockRebase('vda', 'snap.img', 0,
-                           fakelibvirt.VIR_DOMAIN_BLOCK_REBASE_RELATIVE)
+                           flags=fakelibvirt.VIR_DOMAIN_BLOCK_REBASE_RELATIVE)
 
         domain.blockJobInfo('vda', 0).AndReturn({'cur': 1, 'end': 1000})
         domain.blockJobInfo('vda', 0).AndReturn({'cur': 1000, 'end': 1000})
@@ -13401,7 +13404,7 @@ class LibvirtVolumeSnapshotTestCase(test.NoDBTestCase):
         self.drvr._host.has_min_version(mox.IgnoreArg()).AndReturn(True)
 
         domain.blockCommit('vda', 'other-snap.img', 'snap.img', 0,
-                           fakelibvirt.VIR_DOMAIN_BLOCK_COMMIT_RELATIVE)
+                           flags=fakelibvirt.VIR_DOMAIN_BLOCK_COMMIT_RELATIVE)
 
         domain.blockJobInfo('vda', 0).AndReturn({'cur': 1, 'end': 1000})
         domain.blockJobInfo('vda', 0).AndReturn({})
@@ -13530,7 +13533,7 @@ class LibvirtVolumeSnapshotTestCase(test.NoDBTestCase):
         self.drvr._host.get_domain(instance).AndReturn(domain)
         self.drvr._host.has_min_version(mox.IgnoreArg()).AndReturn(True)
 
-        domain.blockRebase('vdb', 'vdb[1]', 0, 0)
+        domain.blockRebase('vdb', 'vdb[1]', 0, flags=0)
 
         domain.blockJobInfo('vdb', 0).AndReturn({'cur': 1, 'end': 1000})
         domain.blockJobInfo('vdb', 0).AndReturn({'cur': 1000, 'end': 1000})
@@ -13571,7 +13574,7 @@ class LibvirtVolumeSnapshotTestCase(test.NoDBTestCase):
         self.drvr._host.has_min_version(mox.IgnoreArg()).AndReturn(True)
 
         domain.blockRebase('vdb', 'vdb[1]', 0,
-                           fakelibvirt.VIR_DOMAIN_BLOCK_REBASE_RELATIVE)
+                           flags=fakelibvirt.VIR_DOMAIN_BLOCK_REBASE_RELATIVE)
 
         domain.blockJobInfo('vdb', 0).AndReturn({'cur': 1, 'end': 1000})
         domain.blockJobInfo('vdb', 0).AndReturn({'cur': 1000, 'end': 1000})
@@ -13653,7 +13656,7 @@ class LibvirtVolumeSnapshotTestCase(test.NoDBTestCase):
         self.drvr._host.has_min_version(mox.IgnoreArg()).AndReturn(True)
 
         domain.blockCommit('vdb', 'vdb[0]', 'vdb[1]', 0,
-                           fakelibvirt.VIR_DOMAIN_BLOCK_COMMIT_RELATIVE)
+                           flags=fakelibvirt.VIR_DOMAIN_BLOCK_COMMIT_RELATIVE)
 
         domain.blockJobInfo('vdb', 0).AndReturn({'cur': 1, 'end': 1000})
         domain.blockJobInfo('vdb', 0).AndReturn({'cur': 1000, 'end': 1000})

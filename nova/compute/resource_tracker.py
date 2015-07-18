@@ -30,7 +30,6 @@ from nova.compute import monitors
 from nova.compute import resources as ext_resources
 from nova.compute import task_states
 from nova.compute import vm_states
-from nova import conductor
 from nova import exception
 from nova.i18n import _, _LI, _LW
 from nova import objects
@@ -79,9 +78,8 @@ class ResourceTracker(object):
         self.stats = importutils.import_object(CONF.compute_stats_class)
         self.tracked_instances = {}
         self.tracked_migrations = {}
-        self.conductor_api = conductor.API()
-        monitor_handler = monitors.ResourceMonitorHandler()
-        self.monitors = monitor_handler.choose_monitors(self)
+        monitor_handler = monitors.MonitorHandler(self)
+        self.monitors = monitor_handler.monitors
         self.ext_resources_handler = \
             ext_resources.ResourceHandler(CONF.compute_resources)
         self.old_resources = objects.ComputeNode()
