@@ -2673,7 +2673,8 @@ class ComputeManager(manager.Manager):
             def detach_block_devices(context, bdms):
                 for bdm in bdms:
                     if bdm.is_volume:
-                        self.detach_volume(context, bdm.volume_id, instance)
+                        self._detach_volume(context, bdm.volume_id, instance,
+                                            destroy_bdm=False)
 
             files = self._decode_files(injected_files)
 
@@ -3417,11 +3418,11 @@ class ComputeManager(manager.Manager):
             old_vm_state = sys_meta.pop('old_vm_state', vm_states.ACTIVE)
 
             instance.system_metadata = sys_meta
-            instance.memory_mb = instance_type['memory_mb']
-            instance.vcpus = instance_type['vcpus']
-            instance.root_gb = instance_type['root_gb']
-            instance.ephemeral_gb = instance_type['ephemeral_gb']
-            instance.instance_type_id = instance_type['id']
+            instance.memory_mb = instance_type.memory_mb
+            instance.vcpus = instance_type.vcpus
+            instance.root_gb = instance_type.root_gb
+            instance.ephemeral_gb = instance_type.ephemeral_gb
+            instance.instance_type_id = instance_type.id
             instance.host = migration.source_compute
             instance.node = migration.source_node
             instance.save()
@@ -3686,11 +3687,11 @@ class ComputeManager(manager.Manager):
 
     @staticmethod
     def _set_instance_info(instance, instance_type):
-        instance.instance_type_id = instance_type['id']
-        instance.memory_mb = instance_type['memory_mb']
-        instance.vcpus = instance_type['vcpus']
-        instance.root_gb = instance_type['root_gb']
-        instance.ephemeral_gb = instance_type['ephemeral_gb']
+        instance.instance_type_id = instance_type.id
+        instance.memory_mb = instance_type.memory_mb
+        instance.vcpus = instance_type.vcpus
+        instance.root_gb = instance_type.root_gb
+        instance.ephemeral_gb = instance_type.ephemeral_gb
         instance.set_flavor(instance_type)
 
     def _finish_resize(self, context, instance, migration, disk_info,
@@ -4442,7 +4443,7 @@ class ComputeManager(manager.Manager):
         self._notify_about_instance_usage(
             context, instance, "volume.attach", extra_usage_info=info)
 
-    def _detach_volume(self, context, instance, bdm):
+    def _driver_detach_volume(self, context, instance, bdm):
         """Do the actual driver detach using block device mapping."""
         mp = bdm.device_name
         volume_id = bdm.volume_id
@@ -4481,11 +4482,18 @@ class ComputeManager(manager.Manager):
                               context=context, instance=instance)
                 self.volume_api.roll_detaching(context, volume_id)
 
-    @wrap_exception()
-    @reverts_task_state
-    @wrap_instance_fault
-    def detach_volume(self, context, volume_id, instance):
-        """Detach a volume from an instance."""
+    def _detach_volume(self, context, volume_id, instance, destroy_bdm=True):
+        """Detach a volume from an instance.
+
+        :param context: security context
+        :param volume_id: the volume id
+        :param instance: the Instance object to detach the volume from
+        :param destroy_bdm: if True, the corresponding BDM entry will be marked
+                            as deleted. Disabling this is useful for operations
+                            like rebuild, when we don't want to destroy BDM
+
+        """
+
         bdm = objects.BlockDeviceMapping.get_by_volume_id(
                 context, volume_id)
         if CONF.volume_usage_poll_interval > 0:
@@ -4509,14 +4517,25 @@ class ComputeManager(manager.Manager):
                                                     instance,
                                                     update_totals=True)
 
-        self._detach_volume(context, instance, bdm)
+        self._driver_detach_volume(context, instance, bdm)
         connector = self.driver.get_volume_connector(instance)
         self.volume_api.terminate_connection(context, volume_id, connector)
-        bdm.destroy()
+
+        if destroy_bdm:
+            bdm.destroy()
+
         info = dict(volume_id=volume_id)
         self._notify_about_instance_usage(
             context, instance, "volume.detach", extra_usage_info=info)
         self.volume_api.detach(context.elevated(), volume_id)
+
+    @wrap_exception()
+    @reverts_task_state
+    @wrap_instance_fault
+    def detach_volume(self, context, volume_id, instance):
+        """Detach a volume from an instance."""
+
+        self._detach_volume(context, volume_id, instance)
 
     def _init_volume_connection(self, context, new_volume_id,
                                 old_volume_id, connector, instance, bdm):
@@ -4649,7 +4668,7 @@ class ComputeManager(manager.Manager):
         try:
             bdm = objects.BlockDeviceMapping.get_by_volume_id(
                     context, volume_id)
-            self._detach_volume(context, instance, bdm)
+            self._driver_detach_volume(context, instance, bdm)
             connector = self.driver.get_volume_connector(instance)
             self.volume_api.terminate_connection(context, volume_id, connector)
         except exception.NotFound:
@@ -5465,12 +5484,11 @@ class ComputeManager(manager.Manager):
         if not CONF.instance_usage_audit:
             return
 
-        if compute_utils.has_audit_been_run(context,
-                                            self.conductor_api,
-                                            self.host):
+        begin, end = utils.last_completed_audit_period()
+        if objects.TaskLog.get(context, 'instance_usage_audit', begin, end,
+                               self.host):
             return
 
-        begin, end = utils.last_completed_audit_period()
         instances = objects.InstanceList.get_active_by_window_joined(
             context, begin, end, host=self.host,
             expected_attrs=['system_metadata', 'info_cache', 'metadata'],
@@ -5487,10 +5505,14 @@ class ComputeManager(manager.Manager):
                   'end_time': end,
                   'number_instances': num_instances})
         start_time = time.time()
-        compute_utils.start_instance_usage_audit(context,
-                                      self.conductor_api,
-                                      begin, end,
-                                      self.host, num_instances)
+        task_log = objects.TaskLog(context)
+        task_log.task_name = 'instance_usage_audit'
+        task_log.period_beginning = begin
+        task_log.period_ending = end
+        task_log.host = self.host
+        task_log.task_items = num_instances
+        task_log.message = 'Instance usage audit started...'
+        task_log.begin_task()
         for instance in instances:
             try:
                 compute_utils.notify_usage_exists(
@@ -5503,16 +5525,11 @@ class ComputeManager(manager.Manager):
                                   'on host %s'), self.host,
                               instance=instance)
                 errors += 1
-        compute_utils.finish_instance_usage_audit(context,
-                                      self.conductor_api,
-                                      begin, end,
-                                      self.host, errors,
-                                      "Instance usage audit ran "
-                                      "for host %s, %s instances "
-                                      "in %s seconds." % (
-                                      self.host,
-                                      num_instances,
-                                      time.time() - start_time))
+        task_log.errors = errors
+        task_log.message = (
+            'Instance usage audit ran for host %s, %s instances in %s seconds.'
+            % (self.host, num_instances, time.time() - start_time))
+        task_log.end_task()
 
     @periodic_task.periodic_task(spacing=CONF.bandwidth_poll_interval)
     def _poll_bandwidth_usage(self, context):
