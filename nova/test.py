@@ -25,6 +25,8 @@ import contextlib
 import datetime
 import eventlet
 eventlet.monkey_patch(os=False)
+import warnings
+warnings.filterwarnings("ignore")
 
 import copy
 import inspect
