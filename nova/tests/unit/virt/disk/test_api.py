@@ -74,12 +74,12 @@ class APITestCase(test.NoDBTestCase):
         def fake_import_fails(*args, **kwargs):
             raise Exception('Failed')
         self.useFixture(fixtures.MonkeyPatch(
-                'oslo.utils.import_module',
+                'oslo_utils.import_module',
                 fake_import_fails))
 
         imgfile = tempfile.NamedTemporaryFile()
         self.addCleanup(imgfile.close)
-        image = imgmodel.LocalFileImage(imgfile, imgmodel.FORMAT_QCOW2)
+        image = imgmodel.LocalFileImage(imgfile.name, imgmodel.FORMAT_QCOW2)
         self.assertFalse(api.is_image_extendable(image))
 
     def test_resize2fs_success(self):
