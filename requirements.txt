@@ -38,6 +38,7 @@ websockify<0.7,>=0.6.0
 -e git+https://github.com/openstack/oslo.config.git#egg=oslo.config
 -e git+https://github.com/openstack/oslo.context.git#egg=oslo.context
 -e git+https://github.com/openstack/oslo.log.git#egg=oslo.log
+-e git+https://github.com/openstack/oslo.reports.git#egg=oslo.reports
 -e git+https://github.com/openstack/oslo.serialization.git#egg=oslo.serialization
 -e git+https://github.com/openstack/oslo.service.git#egg=oslo.service
 -e git+https://github.com/openstack/oslo.utils.git#egg=oslo.utils

@@ -20,6 +20,7 @@ sphinxcontrib-seqdiag
 testrepository>=0.0.18
 testtools>=1.4.0
 tempest-lib>=0.6.1
+bandit>=0.10.1
 
 -e git+https://github.com/openstack/oslosphinx.git#egg=oslosphinx
 -e git+https://github.com/openstack/oslotest.git#egg=oslotest
