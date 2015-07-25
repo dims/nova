@@ -2,6 +2,20 @@
 # of appearance. Changing the order has an impact on the overall integration
 # process, which may cause wedges in the gate later.
 
+-e git+https://github.com/openstack/oslo.concurrency.git#egg=oslo.concurrency
+-e git+https://github.com/openstack/oslo.config.git#egg=oslo.config
+-e git+https://github.com/openstack/oslo.context.git#egg=oslo.context
+-e git+https://github.com/openstack/oslo.log.git#egg=oslo.log
+-e git+https://github.com/openstack/oslo.reports.git#egg=oslo.reports
+-e git+https://github.com/openstack/oslo.serialization.git#egg=oslo.serialization
+-e git+https://github.com/openstack/oslo.service.git#egg=oslo.service
+-e git+https://github.com/openstack/oslo.utils.git#egg=oslo.utils
+-e git+https://github.com/openstack/oslo.db.git#egg=oslo.db
+-e git+https://github.com/openstack/oslo.rootwrap.git#egg=oslo.rootwrap
+-e git+https://github.com/openstack/oslo.messaging.git#egg=oslo.messaging
+-e git+https://github.com/openstack/oslo.i18n.git#egg=oslo.i18n
+-e git+https://github.com/openstack/oslo.middleware.git#egg=oslo.middleware
+-e git+https://github.com/openstack/oslo.versionedobjects.git#egg=oslo.versionedobjects
 pbr<2.0,>=1.3
 SQLAlchemy<1.1.0,>=0.9.7
 boto>=2.32.1
@@ -34,20 +48,6 @@ six>=1.9.0
 stevedore>=1.5.0 # Apache-2.0
 setuptools
 websockify<0.7,>=0.6.0
--e git+https://github.com/openstack/oslo.concurrency.git#egg=oslo.concurrency
--e git+https://github.com/openstack/oslo.config.git#egg=oslo.config
--e git+https://github.com/openstack/oslo.context.git#egg=oslo.context
--e git+https://github.com/openstack/oslo.log.git#egg=oslo.log
--e git+https://github.com/openstack/oslo.reports.git#egg=oslo.reports
--e git+https://github.com/openstack/oslo.serialization.git#egg=oslo.serialization
--e git+https://github.com/openstack/oslo.service.git#egg=oslo.service
--e git+https://github.com/openstack/oslo.utils.git#egg=oslo.utils
--e git+https://github.com/openstack/oslo.db.git#egg=oslo.db
--e git+https://github.com/openstack/oslo.rootwrap.git#egg=oslo.rootwrap
--e git+https://github.com/openstack/oslo.messaging.git#egg=oslo.messaging
--e git+https://github.com/openstack/oslo.i18n.git#egg=oslo.i18n
--e git+https://github.com/openstack/oslo.middleware.git#egg=oslo.middleware
--e git+https://github.com/openstack/oslo.versionedobjects.git#egg=oslo.versionedobjects
 rfc3986>=0.2.0 # Apache-2.0
 psutil<2.0.0,>=1.1.1
 alembic>=0.7.2

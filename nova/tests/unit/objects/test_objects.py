@@ -986,6 +986,36 @@ class TestObjectSerializer(_BaseTestCase):
         # .0 of the object.
         self.assertEqual('1.6', obj.VERSION)
 
+    def test_nested_backport(self):
+        @base.NovaObjectRegistry.register
+        class Parent(base.NovaObject):
+            VERSION = '1.0'
+
+            fields = {
+                'child': fields.ObjectField('MyObj'),
+            }
+
+        @base.NovaObjectRegistry.register  # noqa
+        class Parent(base.NovaObject):
+            VERSION = '1.1'
+
+            fields = {
+                'child': fields.ObjectField('MyObj'),
+            }
+
+        child = MyObj(foo=1)
+        parent = Parent(child=child)
+        prim = parent.obj_to_primitive()
+        child_prim = prim['nova_object.data']['child']
+        child_prim['nova_object.version'] = '1.10'
+        ser = base.NovaObjectSerializer()
+        with mock.patch.object(ser.conductor, 'object_backport') as backport:
+            ser.deserialize_entity(self.context, prim)
+            # NOTE(danms): This should be the version of the parent object,
+            # not the child. If wrong, this will be '1.6', which is the max
+            # child version in our registry.
+            backport.assert_called_once_with(self.context, prim, '1.1')
+
     def test_object_serialization(self):
         ser = base.NovaObjectSerializer()
         obj = MyObj()
@@ -1078,8 +1108,8 @@ object_data = {
     'FloatingIPList': '1.8-9a9fe191dc694ea4ff08946be9460718',
     'HostMapping': '1.0-1a3390a696792a552ab7bd31a77ba9ac',
     'HVSpec': '1.0-3999ff70698fc472c2d4d60359949f6b',
-    'ImageMeta': '1.1-642d1b2eb3e880a367f37d72dd76162d',
-    'ImageMetaProps': '1.1-8fe09b7872538f291649e77375f8ac4c',
+    'ImageMeta': '1.2-642d1b2eb3e880a367f37d72dd76162d',
+    'ImageMetaProps': '1.2-204fe877eecc83ffc68feeea7d1ea481',
     'Instance': '1.21-260d385315d4868b6397c61a13109841',
     'InstanceAction': '1.1-f9f293e526b66fca0d05c3b3a2d13914',
     'InstanceActionEvent': '1.1-e56a64fa4710e43ef7af2ad9d6028b33',
@@ -1091,7 +1121,7 @@ object_data = {
     'InstanceGroup': '1.9-a413a4ec0ff391e3ef0faa4e3e2a96d0',
     'InstanceGroupList': '1.6-1e383df73d9bd224714df83d9a9983bb',
     'InstanceInfoCache': '1.5-cd8b96fefe0fc8d4d337243ba0bf0e1e',
-    'InstanceList': '1.19-f5832b018649c2bd8bb00df788df0aad',
+    'InstanceList': '1.19-d7256b45308fe195ecfb2f5718e44316',
     'InstanceMapping': '1.0-47ef26034dfcbea78427565d9177fe50',
     'InstanceMappingList': '1.0-b7b108f6a56bd100c20a3ebd5f3801a1',
     'InstanceNUMACell': '1.2-535ef30e0de2d6a0d26a71bd58ecafc4',
@@ -1154,7 +1184,7 @@ object_relationships = {
     'FloatingIP': {'FixedIP': '1.11'},
     'FloatingIPList': {'FloatingIP': '1.7'},
     'HostMapping': {'CellMapping': '1.0'},
-    'ImageMeta': {'ImageMetaProps': '1.1'},
+    'ImageMeta': {'ImageMetaProps': '1.2'},
     'Instance': {'InstanceFault': '1.2',
                  'InstanceInfoCache': '1.5',
                  'InstanceNUMATopology': '1.1',
