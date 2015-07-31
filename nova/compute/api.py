@@ -851,8 +851,9 @@ class API(base.Base):
                 block_device.properties_root_device_name(
                     boot_meta.get('properties', {})))
 
+        image_meta = objects.ImageMeta.from_dict(boot_meta)
         numa_topology = hardware.numa_get_constraints(
-                instance_type, boot_meta)
+                instance_type, image_meta)
 
         system_metadata = {}
 
@@ -2942,6 +2943,19 @@ class API(base.Base):
         connect_info = self.compute_rpcapi.get_serial_console(context,
                 instance=instance, console_type=console_type)
         return connect_info
+
+    @wrap_check_policy
+    @check_instance_host
+    def get_mks_console(self, context, instance, console_type):
+        """Get a url to a MKS console."""
+        connect_info = self.compute_rpcapi.get_mks_console(context,
+                instance=instance, console_type=console_type)
+        self.consoleauth_rpcapi.authorize_console(context,
+                connect_info['token'], console_type,
+                connect_info['host'], connect_info['port'],
+                connect_info['internal_access_path'], instance.uuid,
+                access_url=connect_info['access_url'])
+        return {'url': connect_info['access_url']}
 
     @wrap_check_policy
     @check_instance_host

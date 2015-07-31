@@ -125,7 +125,6 @@ CONF = cfg.CONF
 CONF.register_opts(db_opts)
 CONF.register_opts(oslo_db_options.database_opts, 'database')
 CONF.register_opts(api_db_opts, group='api_database')
-CONF.import_opt('compute_topic', 'nova.compute.rpcapi')
 
 LOG = logging.getLogger(__name__)
 
@@ -2388,7 +2387,6 @@ def instance_get_all_by_host_and_node(context, host, node,
                 filter_by(node=node).all(), manual_joins=manual_joins)
 
 
-@require_admin_context
 def instance_get_all_by_host_and_not_type(context, host, type_id=None):
     return _instances_fill_metadata(context,
         _instance_get_all_query(context).filter_by(host=host).
@@ -4309,7 +4307,6 @@ def security_group_default_rule_list(context):
 ###################
 
 
-@require_admin_context
 def provider_fw_rule_create(context, rule):
     fw_rule_ref = models.ProviderFirewallRule()
     fw_rule_ref.update(rule)
@@ -4317,12 +4314,10 @@ def provider_fw_rule_create(context, rule):
     return fw_rule_ref
 
 
-@require_admin_context
 def provider_fw_rule_get_all(context):
     return model_query(context, models.ProviderFirewallRule).all()
 
 
-@require_admin_context
 def provider_fw_rule_destroy(context, rule_id):
     session = get_session()
     with session.begin():

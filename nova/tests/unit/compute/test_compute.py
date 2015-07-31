@@ -219,7 +219,7 @@ class BaseTestCase(test.TestCase):
 
         def fake_show(meh, context, id, **kwargs):
             if id:
-                return {'id': id, 'min_disk': None, 'min_ram': None,
+                return {'id': id,
                         'name': 'fake_name',
                         'status': 'active',
                         'properties': {'kernel_id': 'fake_kernel_id',
@@ -3332,6 +3332,17 @@ class ComputeTestCase(BaseTestCase):
             context=self.context, instance=instance, port=5900,
             console_type="rdp-html5"))
 
+    def test_validate_console_port_mks(self):
+        self.flags(enabled=True, group='mks')
+        instance = self._create_fake_instance_obj()
+        with mock.patch.object(
+                self.compute.driver, 'get_mks_console') as mock_getmks:
+            mock_getmks.return_value = ctype.ConsoleMKS(host="fake_host",
+                                                        port=5900)
+            result = self.compute.validate_console_port(context=self.context,
+                        instance=instance, port=5900, console_type="webmks")
+            self.assertTrue(result)
+
     def test_validate_console_port_wrong_port(self):
         self.flags(enabled=True, group='vnc')
         self.flags(enabled=True, group='spice')
@@ -4256,6 +4267,7 @@ class ComputeTestCase(BaseTestCase):
         migration = objects.Migration(context=self.context.elevated())
         migration.instance_uuid = 'b48316c5-71e8-45e4-9884-6c78055b9b13'
         migration.new_instance_type_id = '1'
+        instance_type = objects.Flavor()
 
         actions = [
             ("reboot_instance", task_states.REBOOTING,
@@ -4292,7 +4304,7 @@ class ComputeTestCase(BaseTestCase):
                                'reservations': []}),
             ("prep_resize", task_states.RESIZE_PREP,
                             {'image': {},
-                             'instance_type': {},
+                             'instance_type': instance_type,
                              'reservations': [],
                              'request_spec': {},
                              'filter_properties': {},
@@ -7495,15 +7507,6 @@ class ComputeAPITestCase(BaseTestCase):
     @mock.patch('nova.virt.hardware.numa_get_constraints')
     def test_create_with_numa_topology(self, numa_constraints_mock):
         inst_type = flavors.get_default_flavor()
-        # This is what the stubbed out method will return
-        fake_image_props = {'status': 'active',
-                            'name': 'fake_name',
-                            'min_ram': None,
-                            'id': 1,
-                            'min_disk': None,
-                            'properties': {'kernel_id': 'fake_kernel_id',
-                                           'something_else': 'meow',
-                                           'ramdisk_id': 'fake_ramdisk_id'}}
 
         numa_topology = objects.InstanceNUMATopology(
             cells=[objects.InstanceNUMACell(
@@ -7516,7 +7519,7 @@ class ComputeAPITestCase(BaseTestCase):
                                                      self.fake_image['id'])
 
         numa_constraints_mock.assert_called_once_with(
-            inst_type, fake_image_props)
+            inst_type, test.MatchType(objects.ImageMeta))
         self.assertEqual(
             numa_topology.cells[0].obj_to_primitive(),
             instances[0].numa_topology.cells[0].obj_to_primitive())
@@ -9206,6 +9209,38 @@ class ComputeAPITestCase(BaseTestCase):
         self.assertRaises(exception.InstanceNotReady,
                           self.compute_api.get_serial_console,
                           self.context, instance, 'serial')
+
+    def test_mks_console(self):
+        fake_instance = self._fake_instance({'uuid': 'fake_uuid',
+                         'host': 'fake_compute_host'})
+        fake_console_type = 'webmks'
+        fake_connect_info = {'token': 'fake_token',
+                             'console_type': fake_console_type,
+                             'host': 'fake_mks_host',
+                             'port': 'fake_tcp_port',
+                             'internal_access_path': 'fake_access_path',
+                             'instance_uuid': fake_instance.uuid,
+                             'access_url': 'fake_access_url'}
+
+        with contextlib.nested(
+            mock.patch.object(self.compute_api.compute_rpcapi,
+                              'get_mks_console',
+                              return_value=fake_connect_info),
+            mock.patch.object(self.compute_api.consoleauth_rpcapi,
+                              'authorize_console')
+        ) as (mock_get_mks_console, mock_authorize_console):
+            console = self.compute_api.get_mks_console(self.context,
+                                                       fake_instance,
+                                                       fake_console_type)
+            self.assertEqual(console, {'url': 'fake_access_url'})
+
+    def test_get_mks_console_no_host(self):
+        # Make sure an exception is raised when instance is not Active.
+        instance = self._create_fake_instance_obj(params={'host': ''})
+
+        self.assertRaises(exception.InstanceNotReady,
+                          self.compute_api.get_mks_console,
+                          self.context, instance, 'mks')
 
     def test_console_output(self):
         fake_instance = self._fake_instance({'uuid': 'fake_uuid',

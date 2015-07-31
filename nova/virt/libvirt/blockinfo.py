@@ -49,13 +49,13 @@ variables / types used
       'root' -> disk_info
 
 
- * 'disk_info': a tuple specifying disk configuration
+ * 'disk_info': a dict specifying disk configuration
 
-   It contains the following 3 fields
+   It contains the following 3 required fields
 
-      (disk bus, disk dev, device type)
+      bus (disk_bus), dev (disk_dev), type (device_type)
 
-   and possibly these optional fields: ('format',)
+   and possibly these optional fields: ('format', 'boot_index')
 
  * 'disk_bus': the guest bus type ('ide', 'virtio', 'scsi', etc)
 
@@ -495,16 +495,7 @@ def get_disk_mapping(virt_type, instance,
        Returns the guest disk mapping for the devices.
     """
 
-    inst_type = instance.get_flavor()
-
     mapping = {}
-
-    pre_assigned_device_names = \
-    [block_device.strip_dev(get_device_name(bdm)) for bdm in itertools.chain(
-        driver.block_device_info_get_ephemerals(block_device_info),
-        [driver.block_device_info_get_swap(block_device_info)],
-        driver.block_device_info_get_mapping(block_device_info))
-     if get_device_name(bdm)]
 
     if rescue:
         rescue_info = get_next_disk_info(mapping,
@@ -517,6 +508,15 @@ def get_disk_mapping(virt_type, instance,
         mapping['disk'] = os_info
 
         return mapping
+
+    inst_type = instance.get_flavor()
+
+    pre_assigned_device_names = \
+    [block_device.strip_dev(get_device_name(bdm)) for bdm in itertools.chain(
+        driver.block_device_info_get_ephemerals(block_device_info),
+        [driver.block_device_info_get_swap(block_device_info)],
+        driver.block_device_info_get_mapping(block_device_info))
+     if get_device_name(bdm)]
 
     # NOTE (ndipanov): root_bdm can be None when we boot from image
     # as there is no driver represenation of local targeted images

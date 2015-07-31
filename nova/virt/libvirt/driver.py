@@ -43,6 +43,7 @@ import eventlet
 from eventlet import greenthread
 from eventlet import tpool
 from lxml import etree
+from os_brick.initiator import connector
 from oslo_concurrency import processutils
 from oslo_config import cfg
 from oslo_log import log as logging
@@ -91,14 +92,14 @@ from nova.virt import hardware
 from nova.virt.image import model as imgmodel
 from nova.virt.libvirt import blockinfo
 from nova.virt.libvirt import config as vconfig
-from nova.virt.libvirt import dmcrypt
 from nova.virt.libvirt import firewall as libvirt_firewall
 from nova.virt.libvirt import guest as libvirt_guest
 from nova.virt.libvirt import host
 from nova.virt.libvirt import imagebackend
 from nova.virt.libvirt import imagecache
-from nova.virt.libvirt import lvm
-from nova.virt.libvirt import rbd_utils
+from nova.virt.libvirt.storage import dmcrypt
+from nova.virt.libvirt.storage import lvm
+from nova.virt.libvirt.storage import rbd_utils
 from nova.virt.libvirt import utils as libvirt_utils
 from nova.virt.libvirt import vif as libvirt_vif
 from nova.virt import netutils
@@ -250,6 +251,8 @@ CONF.import_opt('proxyclient_address', 'nova.console.serial',
 CONF.import_opt('hw_disk_discard', 'nova.virt.libvirt.imagebackend',
                 group='libvirt')
 CONF.import_group('workarounds', 'nova.utils')
+CONF.import_opt('iscsi_use_multipath', 'nova.virt.libvirt.volume',
+                group='libvirt')
 
 DEFAULT_FIREWALL_DRIVER = "%s.%s" % (
     libvirt_firewall.__name__,
@@ -269,20 +272,21 @@ GuestNumaConfig = collections.namedtuple(
     'GuestNumaConfig', ['cpuset', 'cputune', 'numaconfig', 'numatune'])
 
 libvirt_volume_drivers = [
-    'iscsi=nova.virt.libvirt.volume.LibvirtISCSIVolumeDriver',
-    'iser=nova.virt.libvirt.volume.LibvirtISERVolumeDriver',
-    'local=nova.virt.libvirt.volume.LibvirtVolumeDriver',
-    'fake=nova.virt.libvirt.volume.LibvirtFakeVolumeDriver',
-    'rbd=nova.virt.libvirt.volume.LibvirtNetVolumeDriver',
-    'sheepdog=nova.virt.libvirt.volume.LibvirtNetVolumeDriver',
-    'nfs=nova.virt.libvirt.volume.LibvirtNFSVolumeDriver',
-    'smbfs=nova.virt.libvirt.volume.LibvirtSMBFSVolumeDriver',
-    'aoe=nova.virt.libvirt.volume.LibvirtAOEVolumeDriver',
-    'glusterfs=nova.virt.libvirt.volume.LibvirtGlusterfsVolumeDriver',
-    'fibre_channel=nova.virt.libvirt.volume.LibvirtFibreChannelVolumeDriver',
-    'scality=nova.virt.libvirt.volume.LibvirtScalityVolumeDriver',
-    'gpfs=nova.virt.libvirt.volume.LibvirtGPFSVolumeDriver',
-    'quobyte=nova.virt.libvirt.volume.LibvirtQuobyteVolumeDriver',
+    'iscsi=nova.virt.libvirt.volume.volume.LibvirtISCSIVolumeDriver',
+    'iser=nova.virt.libvirt.volume.volume.LibvirtISERVolumeDriver',
+    'local=nova.virt.libvirt.volume.volume.LibvirtVolumeDriver',
+    'fake=nova.virt.libvirt.volume.volume.LibvirtFakeVolumeDriver',
+    'rbd=nova.virt.libvirt.volume.volume.LibvirtNetVolumeDriver',
+    'sheepdog=nova.virt.libvirt.volume.volume.LibvirtNetVolumeDriver',
+    'nfs=nova.virt.libvirt.volume.volume.LibvirtNFSVolumeDriver',
+    'smbfs=nova.virt.libvirt.volume.volume.LibvirtSMBFSVolumeDriver',
+    'aoe=nova.virt.libvirt.volume.volume.LibvirtAOEVolumeDriver',
+    'glusterfs=nova.virt.libvirt.volume.volume.LibvirtGlusterfsVolumeDriver',
+    'fibre_channel='
+        'nova.virt.libvirt.volume.volume.LibvirtFibreChannelVolumeDriver',
+    'scality=nova.virt.libvirt.volume.volume.LibvirtScalityVolumeDriver',
+    'gpfs=nova.virt.libvirt.volume.gpfs.LibvirtGPFSVolumeDriver',
+    'quobyte=nova.virt.libvirt.volume.quobyte.LibvirtQuobyteVolumeDriver',
 ]
 
 
@@ -959,37 +963,12 @@ class LibvirtDriver(driver.ComputeDriver):
         return []
 
     def get_volume_connector(self, instance):
-        if self._initiator is None:
-            self._initiator = libvirt_utils.get_iscsi_initiator()
-            if not self._initiator:
-                LOG.debug('Could not determine iscsi initiator name',
-                          instance=instance)
-
-        if self._fc_wwnns is None:
-            self._fc_wwnns = libvirt_utils.get_fc_wwnns()
-            if not self._fc_wwnns or len(self._fc_wwnns) == 0:
-                LOG.debug('Could not determine fibre channel '
-                          'world wide node names',
-                          instance=instance)
-
-        if self._fc_wwpns is None:
-            self._fc_wwpns = libvirt_utils.get_fc_wwpns()
-            if not self._fc_wwpns or len(self._fc_wwpns) == 0:
-                LOG.debug('Could not determine fibre channel '
-                          'world wide port names',
-                          instance=instance)
-
-        connector = {'ip': CONF.my_block_storage_ip,
-                     'host': CONF.host}
-
-        if self._initiator:
-            connector['initiator'] = self._initiator
-
-        if self._fc_wwnns and self._fc_wwpns:
-            connector["wwnns"] = self._fc_wwnns
-            connector["wwpns"] = self._fc_wwpns
-
-        return connector
+        root_helper = utils._get_root_helper()
+        return connector.get_connector_properties(
+            root_helper, CONF.my_block_storage_ip,
+            CONF.libvirt.iscsi_use_multipath,
+            enforce_multipath=True,
+            host=CONF.host)
 
     def _cleanup_resize(self, instance, network_info):
         # NOTE(wangpan): we get the pre-grizzly instance path firstly,
@@ -3090,15 +3069,19 @@ class LibvirtDriver(driver.ComputeDriver):
 
         return cpu
 
-    def _get_guest_cpu_config(self, flavor, image,
+    def _get_guest_cpu_config(self, flavor, image_meta,
                               guest_cpu_numa_config, instance_numa_topology):
         cpu = self._get_guest_cpu_model_config()
 
         if cpu is None:
             return None
 
+        # TODO(jaypipes): Remove when image_meta is always passed
+        # as an objects.ImageMeta
+        if not isinstance(image_meta, objects.ImageMeta):
+            image_meta = objects.ImageMeta.from_dict(image_meta)
         topology = hardware.get_best_cpu_topology(
-                flavor, image, numa_topology=instance_numa_topology)
+                flavor, image_meta, numa_topology=instance_numa_topology)
 
         cpu.sockets = topology.sockets
         cpu.cores = topology.cores
@@ -3689,6 +3672,10 @@ class LibvirtDriver(driver.ComputeDriver):
         guest_arch = libvirt_utils.get_arch(image_meta)
 
         if CONF.serial_console.enabled:
+            # TODO(jaypipes): Remove when image_meta is always passed
+            # as an objects.ImageMeta
+            if not isinstance(image_meta, objects.ImageMeta):
+                image_meta = objects.ImageMeta.from_dict(image_meta)
             num_ports = hardware.get_number_of_serial_ports(
                 flavor, image_meta)
             for port in six.moves.range(num_ports):
@@ -6752,7 +6739,15 @@ class LibvirtDriver(driver.ComputeDriver):
         image_meta = utils.get_image_from_system_metadata(
             instance.system_metadata)
 
-        block_device_mapping = itertools.chain(*block_device_lists)
+        block_device_mapping = list(itertools.chain(*block_device_lists))
+        # NOTE(ndipanov): Null out the device names so that blockinfo code
+        #                 will assign them
+        for bdm in block_device_mapping:
+            if bdm.device_name is not None:
+                LOG.warn(_LW("Ignoring supplied device name: %(device_name)s. "
+                             "Libvirt can't honour user-supplied dev names"),
+                         {'device_name': bdm.device_name}, instance=instance)
+                bdm.device_name = None
         block_device_info = driver.get_block_device_info(instance,
                                                          block_device_mapping)
 
@@ -6761,6 +6756,27 @@ class LibvirtDriver(driver.ComputeDriver):
                                        instance,
                                        block_device_info,
                                        image_meta)
+
+    def get_device_name_for_instance(self, instance, bdms, block_device_obj):
+        image_meta = utils.get_image_from_system_metadata(
+            instance.system_metadata)
+        block_device_info = driver.get_block_device_info(instance, bdms)
+        instance_info = blockinfo.get_disk_info(
+                CONF.libvirt.virt_type, instance,
+                image_meta, block_device_info=block_device_info)
+
+        suggested_dev_name = block_device_obj.device_name
+        if suggested_dev_name is not None:
+            LOG.warn(_LW('Ignoring supplied device name: %(suggested_dev)s'),
+                     {'suggested_dev': suggested_dev_name}, instance=instance)
+
+        # NOTE(ndipanov): get_info_from_bdm will generate the new device name
+        #                 only when it's actually not set on the bd object
+        block_device_obj.device_name = None
+        disk_info = blockinfo.get_info_from_bdm(
+                CONF.libvirt.virt_type, image_meta, block_device_obj,
+                mapping=instance_info['mapping'])
+        return block_device.prepend_dev(disk_info['dev'])
 
     def is_supported_fs_format(self, fs_type):
         return fs_type in [disk.FS_FORMAT_EXT2, disk.FS_FORMAT_EXT3,
