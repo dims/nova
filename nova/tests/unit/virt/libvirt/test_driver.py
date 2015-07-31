@@ -13,7 +13,6 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import __builtin__
 import contextlib
 import copy
 import datetime
@@ -23,6 +22,7 @@ import os
 import random
 import re
 import shutil
+import signal
 import threading
 import time
 import uuid
@@ -46,6 +46,7 @@ from oslo_utils import timeutils
 from oslo_utils import units
 from oslo_utils import uuidutils
 import six
+from six.moves import builtins
 from six.moves import range
 
 from nova.api.metadata import base as instance_metadata
@@ -3472,9 +3473,9 @@ class LibvirtConnTestCase(test.NoDBTestCase):
     def test_get_guest_config_sysinfo_serial_os(self):
         self.flags(sysinfo_serial="os", group="libvirt")
 
-        real_open = __builtin__.open
+        real_open = builtins.open
         with contextlib.nested(
-                mock.patch.object(__builtin__, "open"),
+                mock.patch.object(builtins, "open"),
         ) as (mock_open, ):
             theuuid = "56b40135-a973-4eb3-87bb-a2382a3e6dbc"
 
@@ -3515,10 +3516,10 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         self.flags(sysinfo_serial="auto", group="libvirt")
 
         real_exists = os.path.exists
-        real_open = __builtin__.open
+        real_open = builtins.open
         with contextlib.nested(
                 mock.patch.object(os.path, "exists"),
-                mock.patch.object(__builtin__, "open"),
+                mock.patch.object(builtins, "open"),
         ) as (mock_exists, mock_open):
             def fake_exists(filename):
                 if filename == "/etc/machine-id":
@@ -9894,6 +9895,15 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         self.mox.ReplayAll()
         self.assertTrue(drvr._is_storage_shared_with('foo', '/path'))
 
+    def test_store_pid_remove_pid(self):
+        instance = objects.Instance(**self.test_instance)
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        popen = mock.Mock(pid=3)
+        drvr.job_tracker.add_job(instance, popen.pid)
+        self.assertIn(3, drvr.job_tracker.jobs[instance.uuid])
+        drvr.job_tracker.remove_job(instance, popen.pid)
+        self.assertNotIn(instance.uuid, drvr.job_tracker.jobs)
+
     @mock.patch('nova.virt.libvirt.host.Host.get_domain')
     def test_get_domain_info_with_more_return(self, mock_get_domain):
         instance = objects.Instance(**self.test_instance)
@@ -11476,12 +11486,18 @@ class LibvirtDriverTestCase(test.NoDBTestCase):
         def fake_execute(*args, **kwargs):
             pass
 
+        def fake_copy_image(src, dest, host=None, receive=False,
+                            on_execute=None, on_completion=None):
+            self.assertIsNotNone(on_execute)
+            self.assertIsNotNone(on_completion)
+
         self.stubs.Set(self.drvr, 'get_instance_disk_info',
                        fake_get_instance_disk_info)
         self.stubs.Set(self.drvr, '_destroy', fake_destroy)
         self.stubs.Set(self.drvr, 'get_host_ip_addr',
                        fake_get_host_ip_addr)
         self.stubs.Set(utils, 'execute', fake_execute)
+        self.stubs.Set(libvirt_utils, 'copy_image', fake_copy_image)
 
         ins_ref = self._create_instance(params=params_for_instance)
 
@@ -12592,6 +12608,28 @@ class LibvirtDriverTestCase(test.NoDBTestCase):
     @mock.patch('shutil.rmtree')
     @mock.patch('nova.utils.execute')
     @mock.patch('os.path.exists')
+    @mock.patch('os.kill')
+    @mock.patch('nova.virt.libvirt.utils.get_instance_path')
+    def test_delete_instance_files_kill_running(
+            self, get_instance_path, kill, exists, exe, shutil):
+        get_instance_path.return_value = '/path'
+        instance = objects.Instance(uuid='fake-uuid', id=1)
+        self.drvr.job_tracker.jobs[instance.uuid] = [3, 4]
+
+        exists.side_effect = [False, False, True, False]
+
+        result = self.drvr.delete_instance_files(instance)
+        get_instance_path.assert_called_with(instance)
+        exe.assert_called_with('mv', '/path', '/path_del')
+        kill.assert_has_calls([mock.call(3, signal.SIGKILL), mock.call(3, 0),
+                               mock.call(4, signal.SIGKILL), mock.call(4, 0)])
+        shutil.assert_called_with('/path_del')
+        self.assertTrue(result)
+        self.assertNotIn(instance.uuid, self.drvr.job_tracker.jobs)
+
+    @mock.patch('shutil.rmtree')
+    @mock.patch('nova.utils.execute')
+    @mock.patch('os.path.exists')
     @mock.patch('nova.virt.libvirt.utils.get_instance_path')
     def test_delete_instance_files_resize(self, get_instance_path, exists,
                                           exe, shutil):
@@ -13073,6 +13111,10 @@ class LibvirtVolumeSnapshotTestCase(test.NoDBTestCase):
                               'file_to_merge': 'snap.img',
                               'merge_target_file': 'other-snap.img'}
 
+        self.delete_info_3 = {'type': 'qcow2',
+                              'file_to_merge': None,
+                              'merge_target_file': None}
+
         self.delete_info_netdisk = {'type': 'qcow2',
                                     'file_to_merge': 'snap.img',
                                     'merge_target_file': 'root.img'}
@@ -13434,6 +13476,38 @@ class LibvirtVolumeSnapshotTestCase(test.NoDBTestCase):
                                           snapshot_id, self.delete_info_2)
 
         self.mox.VerifyAll()
+
+    def test_volume_snapshot_delete_nonrelative_null_base(self):
+        # Deleting newest and last snapshot of a volume
+        # with blockRebase. So base of the new image will be null.
+
+        instance = objects.Instance(**self.inst)
+        snapshot_id = 'snapshot-1234'
+
+        domain = FakeVirtDomain(fake_xml=self.dom_xml)
+        guest = libvirt_guest.Guest(domain)
+
+        with contextlib.nested(
+            mock.patch.object(domain, 'XMLDesc', return_value=self.dom_xml),
+            mock.patch.object(self.drvr._host, 'get_guest',
+                              return_value=guest),
+            mock.patch.object(self.drvr._host, 'has_min_version',
+                              return_value=True),
+            mock.patch.object(domain, 'blockRebase'),
+            mock.patch.object(domain, 'blockJobInfo',
+                              return_value={'cur': 1000, 'end': 1000})
+        ) as (mock_xmldesc, mock_get_guest, mock_has_min_version,
+              mock_rebase, mock_job_info):
+
+            self.drvr._volume_snapshot_delete(self.c, instance,
+                                              self.volume_uuid, snapshot_id,
+                                              self.delete_info_3)
+
+            mock_xmldesc.assert_called_once_with(flags=0)
+            mock_get_guest.assert_called_once_with(instance)
+            mock_has_min_version.assert_called_once_with((1, 1, 1,))
+            mock_rebase.assert_called_once_with('vda', None, 0, flags=0)
+            mock_job_info.assert_called_once_with('vda', flags=0)
 
     def test_volume_snapshot_delete_outer_success(self):
         instance = objects.Instance(**self.inst)

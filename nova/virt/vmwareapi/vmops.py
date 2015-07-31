@@ -44,6 +44,7 @@ from nova.console import type as ctype
 from nova import context as nova_context
 from nova import exception
 from nova.i18n import _, _LE, _LI, _LW
+from nova import objects
 from nova import utils
 from nova import version
 from nova.virt import configdrive
@@ -93,7 +94,8 @@ DcInfo = collections.namedtuple('DcInfo',
 class VirtualMachineInstanceConfigInfo(object):
     """Parameters needed to create and configure a new instance."""
 
-    def __init__(self, instance, image_info, datastore, dc_info, image_cache):
+    def __init__(self, instance, image_info, datastore, dc_info, image_cache,
+                 extra_specs=None):
 
         # Some methods called during spawn take the instance parameter purely
         # for logging purposes.
@@ -105,6 +107,7 @@ class VirtualMachineInstanceConfigInfo(object):
         self.datastore = datastore
         self.dc_info = dc_info
         self._image_cache = image_cache
+        self._extra_specs = extra_specs
 
     @property
     def cache_image_folder(self):
@@ -301,22 +304,30 @@ class VMwareVMOps(object):
                                    config_spec, self._root_resource_pool)
         return vm_ref
 
-    def _get_extra_specs(self, flavor):
+    def _get_extra_specs(self, flavor, image_meta=None):
+        image_meta = image_meta or objects.ImageMeta.from_dict({})
         extra_specs = vm_util.ExtraSpecs()
-        for (key, type) in (('cpu_limit', int),
-                            ('cpu_reservation', int),
-                            ('cpu_shares_level', str),
-                            ('cpu_shares_share', int)):
-            value = flavor.extra_specs.get('quota:' + key)
-            if value:
-                setattr(extra_specs.cpu_limits, key, type(value))
+        for resource in ['cpu', 'memory', 'disk_io']:
+            for (key, type) in (('limit', int),
+                                ('reservation', int),
+                                ('shares_level', str),
+                                ('shares_share', int)):
+                value = flavor.extra_specs.get('quota:' + resource + '_' + key)
+                if value:
+                    setattr(getattr(extra_specs, resource + '_limits'),
+                            key, type(value))
         extra_specs.cpu_limits.validate()
+        extra_specs.memory_limits.validate()
+        extra_specs.disk_io_limits.validate()
         hw_version = flavor.extra_specs.get('vmware:hw_version')
         extra_specs.hw_version = hw_version
         if CONF.vmware.pbm_enabled:
             storage_policy = flavor.extra_specs.get('vmware:storage_policy',
                     CONF.vmware.pbm_default_policy)
             extra_specs.storage_policy = storage_policy
+        topology = hardware.get_best_cpu_topology(flavor, image_meta,
+                                                  allow_threads=False)
+        extra_specs.cores_per_socket = topology.cores
         return extra_specs
 
     def _fetch_image_as_file(self, context, vi, image_ds_loc):
@@ -473,7 +484,7 @@ class VMwareVMOps(object):
                             vi.cache_image_folder)
 
     def _get_vm_config_info(self, instance, image_info,
-                            storage_policy=None):
+                            extra_specs):
         """Captures all relevant information from the spawn parameters."""
 
         if (instance.root_gb != 0 and
@@ -486,7 +497,7 @@ class VMwareVMOps(object):
         datastore = ds_util.get_datastore(self._session,
                                           self._cluster,
                                           self._datastore_regex,
-                                          storage_policy,
+                                          extra_specs.storage_policy,
                                           allowed_ds_types)
         dc_info = self.get_datacenter_ref_and_name(datastore.ref)
 
@@ -494,7 +505,8 @@ class VMwareVMOps(object):
                                                 image_info,
                                                 datastore,
                                                 dc_info,
-                                                self._imagecache)
+                                                self._imagecache,
+                                                extra_specs)
 
     def _get_image_callbacks(self, vi):
         disk_type = vi.ii.disk_type
@@ -591,10 +603,10 @@ class VMwareVMOps(object):
         client_factory = self._session.vim.client.factory
         image_info = images.VMwareImage.from_image(instance.image_ref,
                                                    image_meta)
-        extra_specs = self._get_extra_specs(instance.flavor)
+        extra_specs = self._get_extra_specs(instance.flavor, image_meta)
 
         vi = self._get_vm_config_info(instance, image_info,
-                                      extra_specs.storage_policy)
+                                      extra_specs)
 
         metadata = self._get_instance_metadata(context, instance)
         # Creates the virtual machine. The virtual machine reference returned
@@ -1127,10 +1139,10 @@ class VMwareVMOps(object):
         instance.progress = progress
         instance.save()
 
-    def _resize_vm(self, context, instance, vm_ref, flavor):
+    def _resize_vm(self, context, instance, vm_ref, flavor, image_meta):
         """Resizes the VM according to the flavor."""
         client_factory = self._session.vim.client.factory
-        extra_specs = self._get_extra_specs(flavor)
+        extra_specs = self._get_extra_specs(flavor, image_meta)
         metadata = self._get_instance_metadata(context, instance)
         vm_resize_spec = vm_util.get_vm_resize_spec(client_factory,
                                                     int(flavor.vcpus),
@@ -1210,7 +1222,8 @@ class VMwareVMOps(object):
                                        total_steps=RESIZE_TOTAL_STEPS)
 
         # 2. Reconfigure the VM properties
-        self._resize_vm(context, instance, vm_ref, flavor)
+        image_meta = objects.ImageMeta.from_instance(instance)
+        self._resize_vm(context, instance, vm_ref, flavor, image_meta)
 
         self._update_instance_progress(context, instance,
                                        step=2,
@@ -1254,7 +1267,8 @@ class VMwareVMOps(object):
         vm_util.power_off_instance(self._session, instance, vm_ref)
         client_factory = self._session.vim.client.factory
         # Reconfigure the VM properties
-        extra_specs = self._get_extra_specs(instance.flavor)
+        image_meta = objects.ImageMeta.from_instance(instance)
+        extra_specs = self._get_extra_specs(instance.flavor, image_meta)
         metadata = self._get_instance_metadata(context, instance)
         vm_resize_spec = vm_util.get_vm_resize_spec(client_factory,
                                                     int(instance.vcpus),
@@ -1675,7 +1689,8 @@ class VMwareVMOps(object):
                 vm_ref, vi.instance,
                 vi.ii.adapter_type, vi.ii.disk_type,
                 str(root_disk_ds_loc),
-                vi.root_gb * units.Mi, False)
+                vi.root_gb * units.Mi, False,
+                disk_io_limits=vi._extra_specs.disk_io_limits)
 
     def _sized_image_exists(self, sized_disk_ds_loc, ds_ref):
         ds_browser = self._get_ds_browser(ds_ref)
@@ -1748,7 +1763,8 @@ class VMwareVMOps(object):
                 vm_ref, vi.instance,
                 vi.ii.adapter_type, vi.ii.disk_type,
                 str(sized_disk_ds_loc),
-                vi.root_gb * units.Mi, vi.ii.linked_clone)
+                vi.root_gb * units.Mi, vi.ii.linked_clone,
+                disk_io_limits=vi._extra_specs.disk_io_limits)
 
     def _use_iso_image(self, vm_ref, vi):
         """Uses cached image as a bootable virtual cdrom."""
@@ -1778,7 +1794,8 @@ class VMwareVMOps(object):
                     vm_ref, vi.instance,
                     vi.ii.adapter_type, vi.ii.disk_type,
                     str(root_disk_ds_loc),
-                    vi.root_gb * units.Mi, linked_clone)
+                    vi.root_gb * units.Mi, linked_clone,
+                    disk_io_limits=vi._extra_specs.disk_io_limits)
 
     def _update_datacenter_cache_from_objects(self, dcs):
         """Updates the datastore/datacenter cache."""

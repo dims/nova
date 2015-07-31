@@ -2310,7 +2310,14 @@ class ComputeManager(manager.Manager):
             # _shutdown_instance in the compute manager as shutdown calls
             # deallocate_for_instance so the info_cache is still needed
             # at this point.
-            instance.info_cache.delete()
+            if instance.info_cache is not None:
+                instance.info_cache.delete()
+            else:
+                # NOTE(yoshimatsu): Avoid AttributeError if instance.info_cache
+                # is None. When the root cause that instance.info_cache becomes
+                # None is fixed, the log level should be reconsidered.
+                LOG.warning(_LW("Info cache for instance could not be found. "
+                                "Ignore."), instance=instance)
 
             # NOTE(vish): We have already deleted the instance, so we have
             #             to ignore problems cleaning up the volumes. It
@@ -2975,7 +2982,7 @@ class ComputeManager(manager.Manager):
 
         :param context: security context
         :param instance: Instance dict
-        :param backup_type: daily | weekly
+        :param backup_type: a user-defined type, like "daily" or "weekly" etc.
         :param rotation: int representing how many backups to keep around;
             None if rotation shouldn't be used (as in the case of snapshots)
         """

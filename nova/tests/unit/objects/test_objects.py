@@ -1132,8 +1132,8 @@ object_data = {
     'KeyPairList': '1.2-60f984184dc5a8eba6e34e20cbabef04',
     'Migration': '1.2-8784125bedcea0a9227318511904e853',
     'MigrationList': '1.2-5e79c0693d7ebe4e9ac03b5db11ab243',
-    'MonitorMetric': '1.0-4fe7f3fb1777567883ac842120ec5800',
-    'MonitorMetricList': '1.0-1b54e51ad0fc1f3a8878f5010e7e16dc',
+    'MonitorMetric': '1.1-53b1db7c4ae2c531db79761e7acc52ba',
+    'MonitorMetricList': '1.1-ea2a8e1c1ecf3608af2956e657adeb4c',
     'NUMACell': '1.2-74fc993ac5c83005e76e34e8487f1c05',
     'NUMAPagesTopology': '1.0-c71d86317283266dc8364c149155e48e',
     'NUMATopology': '1.2-c63fad38be73b6afd04715c9c1b29220',
@@ -1207,7 +1207,7 @@ object_relationships = {
     'InstancePCIRequests': {'InstancePCIRequest': '1.1'},
     'KeyPairList': {'KeyPair': '1.3'},
     'MigrationList': {'Migration': '1.2'},
-    'MonitorMetricList': {'MonitorMetric': '1.0'},
+    'MonitorMetricList': {'MonitorMetric': '1.1'},
     'NetworkList': {'Network': '1.2'},
     'NetworkRequestList': {'NetworkRequest': '1.1'},
     'NUMACell': {'NUMAPagesTopology': '1.0'},
@@ -1250,10 +1250,31 @@ class TestObjectVersions(test.NoDBTestCase):
             # This means the top-level thing never hit a remotable layer
             return None
 
+    def _un_unicodify_enum_valid_values(self, _fields):
+        for name, field in _fields:
+            if not isinstance(field, (fields.BaseEnumField,
+                                      fields.EnumField)):
+                continue
+            orig_type = type(field._type._valid_values)
+            field._type._valid_values = orig_type(
+                [x.encode('utf-8') for x in
+                 field._type._valid_values])
+
     def _get_fingerprint(self, obj_name):
         obj_classes = base.NovaObjectRegistry.obj_classes()
         obj_class = obj_classes[obj_name][0]
         fields = list(obj_class.fields.items())
+        # NOTE(danms): We store valid_values in the enum as strings,
+        # but oslo is working to make these coerced to unicode (which
+        # is the right thing to do). The functionality will be
+        # unchanged, but the repr() result that we use for calculating
+        # the hashes will be different. This helper method coerces all
+        # Enum valid_values elements to UTF-8 string before we make the
+        # repr() call so that it is consistent before and after the
+        # unicode change, and on py2 and py3.
+        if six.PY2:
+            self._un_unicodify_enum_valid_values(fields)
+
         fields.sort()
         methods = []
         for name in dir(obj_class):

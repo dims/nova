@@ -671,7 +671,8 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                                 memory_mb=1024,
                                 vcpus=2,
                                 extra_specs={})
-        self._vmops._resize_vm(self._context, self._instance, 'vm-ref', flavor)
+        self._vmops._resize_vm(self._context, self._instance, 'vm-ref', flavor,
+                               None)
         fake_resize_spec.assert_called_once_with(
             self._session.vim.client.factory, 2, 1024, extra_specs,
                 metadata=self._metadata)
@@ -815,7 +816,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                                                self._instance,
                                                'fake-ref')
         fake_resize_vm.assert_called_once_with(self._context, self._instance,
-                                               'fake-ref', flavor)
+                                               'fake-ref', flavor, mock.ANY)
         fake_resize_disk.assert_called_once_with(self._instance, 'fake-ref',
                                                  vmdk, flavor)
         calls = [mock.call(self._context, self._instance, step=i,
@@ -955,7 +956,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
             from_image.assert_called_once_with(self._instance.image_ref,
                                                self._image_meta)
             get_vm_config_info.assert_called_once_with(self._instance,
-                image_info, extra_specs.storage_policy)
+                image_info, extra_specs)
             build_virtual_machine.assert_called_once_with(self._instance,
                 image_info, vi.dc_info, vi.datastore, [],
                 extra_specs, self._get_metadata())
@@ -1013,7 +1014,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
             from_image.assert_called_once_with(self._instance.image_ref,
                                                self._image_meta)
             get_vm_config_info.assert_called_once_with(self._instance,
-                image_info, extra_specs.storage_policy)
+                image_info, extra_specs)
             build_virtual_machine.assert_called_once_with(self._instance,
                 image_info, vi.dc_info, vi.datastore, [],
                 extra_specs, self._get_metadata(is_image_used=False))
@@ -1063,7 +1064,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
         from_image.assert_called_once_with(self._instance.image_ref,
                                            self._image_meta)
         get_vm_config_info.assert_called_once_with(
-            self._instance, image_info, extra_specs.storage_policy)
+            self._instance, image_info, extra_specs)
         build_virtual_machine.assert_called_once_with(self._instance,
             image_info, vi.dc_info, vi.datastore, [],
             extra_specs, self._get_metadata(is_image_used=False))
@@ -1091,6 +1092,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                                              mock_extend_virtual_disk,
                                              mock_sized_image_exists,
                                              flavor_fits_image=False):
+        extra_specs = vm_util.ExtraSpecs()
         file_size = 10 * units.Gi if flavor_fits_image else 5 * units.Gi
         image_info = images.VMwareImage(
                 image_id=self._image_id,
@@ -1102,7 +1104,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
         mock_imagecache.get_image_cache_folder.return_value = cache_root_folder
         vi = vmops.VirtualMachineInstanceConfigInfo(
                 self._instance, image_info,
-                self._ds, self._dc_info, mock_imagecache)
+                self._ds, self._dc_info, mock_imagecache, extra_specs)
 
         sized_cached_image_ds_loc = cache_root_folder.join(
                 "%s.%s.vmdk" % (self._image_id, vi.root_gb))
@@ -1127,7 +1129,8 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                 "fake_vm_ref", self._instance, vi.ii.adapter_type,
                 vi.ii.disk_type,
                 str(sized_cached_image_ds_loc),
-                vi.root_gb * units.Mi, False)
+                vi.root_gb * units.Mi, False,
+                disk_io_limits=vi._extra_specs.disk_io_limits)
 
     def test_use_disk_image_as_linked_clone(self):
         self._test_use_disk_image_as_linked_clone()
@@ -1141,6 +1144,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                                           mock_copy_virtual_disk,
                                           mock_extend_virtual_disk,
                                           flavor_fits_image=False):
+        extra_specs = vm_util.ExtraSpecs()
         file_size = 10 * units.Gi if flavor_fits_image else 5 * units.Gi
         image_info = images.VMwareImage(
                 image_id=self._image_id,
@@ -1152,7 +1156,8 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
         mock_imagecache.get_image_cache_folder.return_value = cache_root_folder
         vi = vmops.VirtualMachineInstanceConfigInfo(
                 self._instance, image_info,
-                self._ds, self._dc_info, mock_imagecache)
+                self._ds, self._dc_info, mock_imagecache,
+                extra_specs)
 
         self._vmops._volumeops = mock.Mock()
         mock_attach_disk_to_vm = self._vmops._volumeops.attach_disk_to_vm
@@ -1172,7 +1177,8 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
         mock_attach_disk_to_vm.assert_called_once_with(
                 "fake_vm_ref", self._instance, vi.ii.adapter_type,
                 vi.ii.disk_type, '[fake_ds] fake_uuid/fake_uuid.vmdk',
-                vi.root_gb * units.Mi, False)
+                vi.root_gb * units.Mi, False,
+                disk_io_limits=vi._extra_specs.disk_io_limits)
 
     def test_use_disk_image_as_full_clone(self):
         self._test_use_disk_image_as_full_clone()
@@ -1186,6 +1192,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                             mock_create_virtual_disk,
                             mock_attach_cdrom,
                             with_root_disk):
+        extra_specs = vm_util.ExtraSpecs()
         image_info = images.VMwareImage(
                 image_id=self._image_id,
                 file_size=10 * units.Mi,
@@ -1196,7 +1203,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
         mock_imagecache.get_image_cache_folder.return_value = cache_root_folder
         vi = vmops.VirtualMachineInstanceConfigInfo(
                 self._instance, image_info,
-                self._ds, self._dc_info, mock_imagecache)
+                self._ds, self._dc_info, mock_imagecache, extra_specs)
 
         self._vmops._volumeops = mock.Mock()
         mock_attach_disk_to_vm = self._vmops._volumeops.attach_disk_to_vm
@@ -1218,7 +1225,8 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                     "fake_vm_ref", self._instance,
                     vi.ii.adapter_type, vi.ii.disk_type,
                     '[fake_ds] fake_uuid/fake_uuid.vmdk',
-                    vi.root_gb * units.Mi, linked_clone)
+                    vi.root_gb * units.Mi, linked_clone,
+                    disk_io_limits=vi._extra_specs.disk_io_limits)
 
     def test_use_iso_image_with_root_disk(self):
         self._test_use_iso_image(with_root_disk=True)
@@ -1286,6 +1294,9 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                    extra_specs=None,
                    config_drive=False):
 
+        if extra_specs is None:
+            extra_specs = vm_util.ExtraSpecs()
+
         image_size = (self._instance.root_gb) * units.Gi / 2
         image = {
             'id': self._image_id,
@@ -1297,7 +1308,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
             image_id=self._image_id,
             file_size=image_size)
         vi = self._vmops._get_vm_config_info(
-            self._instance, image_info)
+            self._instance, image_info, extra_specs)
 
         self._vmops._volumeops = mock.Mock()
         network_info = mock.Mock()
@@ -1429,13 +1440,16 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
 
         mock_get_datastore.return_value = self._ds
         mock_get_datacenter_ref_and_name.return_value = self._dc_info
+        extra_specs = vm_util.ExtraSpecs()
 
-        vi = self._vmops._get_vm_config_info(self._instance, image_info)
+        vi = self._vmops._get_vm_config_info(self._instance, image_info,
+                                             extra_specs)
         self.assertEqual(image_info, vi.ii)
         self.assertEqual(self._ds, vi.datastore)
         self.assertEqual(self._instance.root_gb, vi.root_gb)
         self.assertEqual(self._instance, vi.instance)
         self.assertEqual(self._instance.uuid, vi.instance.uuid)
+        self.assertEqual(extra_specs, vi._extra_specs)
 
         cache_image_path = '[%s] vmware_base/%s/%s.vmdk' % (
             self._ds.name, self._image_id, self._image_id)
@@ -1623,79 +1637,112 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
             self.fail('NIC not configured')
 
     def test_spawn_cpu_limit(self):
-        cpu_limits = vm_util.CpuLimits(cpu_limit=7)
+        cpu_limits = vm_util.Limits(limit=7)
         extra_specs = vm_util.ExtraSpecs(cpu_limits=cpu_limits)
         self._test_spawn(extra_specs=extra_specs)
 
     def test_spawn_cpu_reservation(self):
-        cpu_limits = vm_util.CpuLimits(cpu_reservation=7)
+        cpu_limits = vm_util.Limits(reservation=7)
         extra_specs = vm_util.ExtraSpecs(cpu_limits=cpu_limits)
         self._test_spawn(extra_specs=extra_specs)
 
     def test_spawn_cpu_allocations(self):
-        cpu_limits = vm_util.CpuLimits(cpu_limit=7,
-                                       cpu_reservation=6)
+        cpu_limits = vm_util.Limits(limit=7,
+                                    reservation=6)
         extra_specs = vm_util.ExtraSpecs(cpu_limits=cpu_limits)
         self._test_spawn(extra_specs=extra_specs)
 
     def test_spawn_cpu_shares_level(self):
-        cpu_limits = vm_util.CpuLimits(cpu_shares_level='high')
+        cpu_limits = vm_util.Limits(shares_level='high')
         extra_specs = vm_util.ExtraSpecs(cpu_limits=cpu_limits)
         self._test_spawn(extra_specs=extra_specs)
 
     def test_spawn_cpu_shares_custom(self):
-        cpu_limits = vm_util.CpuLimits(cpu_shares_level='custom',
-                                       cpu_shares_share=1948)
+        cpu_limits = vm_util.Limits(shares_level='custom',
+                                    shares_share=1948)
         extra_specs = vm_util.ExtraSpecs(cpu_limits=cpu_limits)
         self._test_spawn(extra_specs=extra_specs)
 
+    def test_spawn_memory_limit(self):
+        memory_limits = vm_util.Limits(limit=7)
+        extra_specs = vm_util.ExtraSpecs(memory_limits=memory_limits)
+        self._test_spawn(extra_specs=extra_specs)
+
+    def test_spawn_memory_reservation(self):
+        memory_limits = vm_util.Limits(reservation=7)
+        extra_specs = vm_util.ExtraSpecs(memory_limits=memory_limits)
+        self._test_spawn(extra_specs=extra_specs)
+
+    def test_spawn_memory_allocations(self):
+        memory_limits = vm_util.Limits(limit=7,
+                                       reservation=6)
+        extra_specs = vm_util.ExtraSpecs(memory_limits=memory_limits)
+        self._test_spawn(extra_specs=extra_specs)
+
+    def test_spawn_memory_shares_level(self):
+        memory_limits = vm_util.Limits(shares_level='high')
+        extra_specs = vm_util.ExtraSpecs(memory_limits=memory_limits)
+        self._test_spawn(extra_specs=extra_specs)
+
+    def test_spawn_memory_shares_custom(self):
+        memory_limits = vm_util.Limits(shares_level='custom',
+                                       shares_share=1948)
+        extra_specs = vm_util.ExtraSpecs(memory_limits=memory_limits)
+        self._test_spawn(extra_specs=extra_specs)
+
     def _validate_extra_specs(self, expected, actual):
-        self.assertEqual(expected.cpu_limits.cpu_limit,
-                         actual.cpu_limits.cpu_limit)
-        self.assertEqual(expected.cpu_limits.cpu_reservation,
-                         actual.cpu_limits.cpu_reservation)
-        self.assertEqual(expected.cpu_limits.cpu_shares_level,
-                         actual.cpu_limits.cpu_shares_level)
-        self.assertEqual(expected.cpu_limits.cpu_shares_share,
-                         actual.cpu_limits.cpu_shares_share)
+        self.assertEqual(expected.cpu_limits.limit,
+                         actual.cpu_limits.limit)
+        self.assertEqual(expected.cpu_limits.reservation,
+                         actual.cpu_limits.reservation)
+        self.assertEqual(expected.cpu_limits.shares_level,
+                         actual.cpu_limits.shares_level)
+        self.assertEqual(expected.cpu_limits.shares_share,
+                         actual.cpu_limits.shares_share)
 
     def _validate_flavor_extra_specs(self, flavor_extra_specs, expected):
         # Validate that the extra specs are parsed correctly
-        flavor = objects.Flavor(extra_specs=flavor_extra_specs)
-        flavor_extra_specs = self._vmops._get_extra_specs(flavor)
+        flavor = objects.Flavor(name='my-flavor',
+                                memory_mb=6,
+                                vcpus=28,
+                                root_gb=496,
+                                ephemeral_gb=8128,
+                                swap=33550336,
+                                extra_specs=flavor_extra_specs)
+        flavor_extra_specs = self._vmops._get_extra_specs(flavor, None)
         self._validate_extra_specs(expected, flavor_extra_specs)
 
     def test_extra_specs_cpu_limit(self):
         flavor_extra_specs = {'quota:cpu_limit': 7}
-        cpu_limits = vm_util.CpuLimits(cpu_limit=7)
+        cpu_limits = vm_util.Limits(limit=7)
         extra_specs = vm_util.ExtraSpecs(cpu_limits=cpu_limits)
         self._validate_flavor_extra_specs(flavor_extra_specs, extra_specs)
 
     def test_extra_specs_cpu_reservations(self):
         flavor_extra_specs = {'quota:cpu_reservation': 7}
-        cpu_limits = vm_util.CpuLimits(cpu_reservation=7)
+        cpu_limits = vm_util.Limits(reservation=7)
         extra_specs = vm_util.ExtraSpecs(cpu_limits=cpu_limits)
         self._validate_flavor_extra_specs(flavor_extra_specs, extra_specs)
 
     def test_extra_specs_cpu_allocations(self):
         flavor_extra_specs = {'quota:cpu_limit': 7,
                               'quota:cpu_reservation': 6}
-        cpu_limits = vm_util.CpuLimits(cpu_limit=7,
-                                       cpu_reservation=6)
+        cpu_limits = vm_util.Limits(limit=7,
+                                    reservation=6)
         extra_specs = vm_util.ExtraSpecs(cpu_limits=cpu_limits)
         self._validate_flavor_extra_specs(flavor_extra_specs, extra_specs)
 
     def test_extra_specs_cpu_shares_level(self):
         flavor_extra_specs = {'quota:cpu_shares_level': 'high'}
-        cpu_limits = vm_util.CpuLimits(cpu_shares_level='high')
+        cpu_limits = vm_util.Limits(shares_level='high')
         extra_specs = vm_util.ExtraSpecs(cpu_limits=cpu_limits)
         self._validate_flavor_extra_specs(flavor_extra_specs, extra_specs)
 
     def test_extra_specs_cpu_shares_custom(self):
         flavor_extra_specs = {'quota:cpu_shares_level': 'custom',
                               'quota:cpu_shares_share': 1948}
-        cpu_limits = vm_util.CpuLimits(cpu_shares_level='custom',
-                                       cpu_shares_share=1948)
+        cpu_limits = vm_util.Limits(shares_level='custom',
+                                    shares_share=1948)
         extra_specs = vm_util.ExtraSpecs(cpu_limits=cpu_limits)
         self._validate_flavor_extra_specs(flavor_extra_specs, extra_specs)
 
@@ -1943,7 +1990,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                                 extra_specs={})
         self.flags(pbm_enabled=True,
                    pbm_default_policy='fake-policy', group='vmware')
-        extra_specs = self._vmops._get_extra_specs(flavor)
+        extra_specs = self._vmops._get_extra_specs(flavor, None)
         self.assertEqual('fake-policy', extra_specs.storage_policy)
 
     def test_get_storage_policy_extra_specs(self):
@@ -1957,7 +2004,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                                 extra_specs=extra_specs)
         self.flags(pbm_enabled=True,
                    pbm_default_policy='default-policy', group='vmware')
-        extra_specs = self._vmops._get_extra_specs(flavor)
+        extra_specs = self._vmops._get_extra_specs(flavor, None)
         self.assertEqual('flavor-policy', extra_specs.storage_policy)
 
     def test_get_base_folder_not_set(self):
@@ -2114,3 +2161,15 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
             self.assertEqual('fira', path['ticket'])
             self.assertEqual('aabbccddeeff', path['thumbprint'])
             self.assertEqual('[ds1] fira/foo.vmx', path['cfgFile'])
+
+    def test_get_cores_per_socket(self):
+        extra_specs = {'hw:cpu_sockets': 7}
+        flavor = objects.Flavor(name='m1.small',
+                                memory_mb=6,
+                                vcpus=28,
+                                root_gb=496,
+                                ephemeral_gb=8128,
+                                swap=33550336,
+                                extra_specs=extra_specs)
+        extra_specs = self._vmops._get_extra_specs(flavor, None)
+        self.assertEqual(4, int(extra_specs.cores_per_socket))

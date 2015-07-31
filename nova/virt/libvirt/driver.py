@@ -97,6 +97,7 @@ from nova.virt.libvirt import guest as libvirt_guest
 from nova.virt.libvirt import host
 from nova.virt.libvirt import imagebackend
 from nova.virt.libvirt import imagecache
+from nova.virt.libvirt import instancejobtracker
 from nova.virt.libvirt.storage import dmcrypt
 from nova.virt.libvirt.storage import lvm
 from nova.virt.libvirt.storage import rbd_utils
@@ -468,6 +469,8 @@ class LibvirtDriver(driver.ComputeDriver):
                   {'actual': CONF.libvirt.sysinfo_serial,
                    'expect': ', '.join("'%s'" % k for k in
                                        sysinfo_serial_funcs.keys())})
+
+        self.job_tracker = instancejobtracker.InstanceJobTracker()
 
     def _get_volume_drivers(self):
         return libvirt_volume_drivers
@@ -1866,7 +1869,7 @@ class LibvirtDriver(driver.ComputeDriver):
             # (relative backing path seems to work for this case)
             try:
                 libvirt.VIR_DOMAIN_BLOCK_REBASE_RELATIVE
-                relative = True
+                relative = rebase_base is not None
             except AttributeError:
                 LOG.warn(_LW("Relative blockrebase support was not detected. "
                              "Continuing with old behaviour."))
@@ -2211,6 +2214,20 @@ class LibvirtDriver(driver.ComputeDriver):
         # network, and block device connections, etc. are established
         # and available before we attempt to start the instance.
         self._hard_reboot(context, instance, network_info, block_device_info)
+
+    def inject_nmi(self, instance):
+
+        """Inject an NMI to the specified instance."""
+        try:
+            self._host.get_guest(instance).inject_nmi()
+        except libvirt.libvirtError as ex:
+            error_code = ex.get_error_code()
+            msg = (_('Error from libvirt while injecting an NMI to '
+                     '%(instance_uuid)s: '
+                     '[Error Code %(error_code)s] %(ex)s')
+                   % {'instance_uuid': instance.uuid,
+                      'error_code': error_code, 'ex': ex})
+            raise exception.NovaException(msg)
 
     def suspend(self, context, instance):
         """Suspend the specified instance."""
@@ -6299,6 +6316,11 @@ class LibvirtDriver(driver.ComputeDriver):
                     # finish_migration/_create_image to re-create it for us.
                     continue
 
+                on_execute = lambda process: self.job_tracker.add_job(
+                    instance, process.pid)
+                on_completion = lambda process: self.job_tracker.remove_job(
+                    instance, process.pid)
+
                 if info['type'] == 'qcow2' and info['backing_file']:
                     tmp_path = from_path + "_rbase"
                     # merge backing file
@@ -6308,11 +6330,15 @@ class LibvirtDriver(driver.ComputeDriver):
                     if shared_storage:
                         utils.execute('mv', tmp_path, img_path)
                     else:
-                        libvirt_utils.copy_image(tmp_path, img_path, host=dest)
+                        libvirt_utils.copy_image(tmp_path, img_path, host=dest,
+                                                 on_execute=on_execute,
+                                                 on_completion=on_completion)
                         utils.execute('rm', '-f', tmp_path)
 
                 else:  # raw or qcow2 with no backing file
-                    libvirt_utils.copy_image(from_path, img_path, host=dest)
+                    libvirt_utils.copy_image(from_path, img_path, host=dest,
+                                             on_execute=on_execute,
+                                             on_completion=on_completion)
         except Exception:
             with excutils.save_and_reraise_exception():
                 self._cleanup_remote_migration(dest, inst_base,
@@ -6699,6 +6725,8 @@ class LibvirtDriver(driver.ComputeDriver):
         # invocation failed due to the absence of both target and
         # target_resize.
         if not remaining_path and os.path.exists(target_del):
+            self.job_tracker.terminate_jobs(instance)
+
             LOG.info(_LI('Deleting instance files %s'), target_del,
                      instance=instance)
             remaining_path = target_del
