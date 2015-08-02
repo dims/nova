@@ -285,7 +285,7 @@ libvirt_volume_drivers = [
     'glusterfs=nova.virt.libvirt.volume.volume.LibvirtGlusterfsVolumeDriver',
     'fibre_channel='
         'nova.virt.libvirt.volume.volume.LibvirtFibreChannelVolumeDriver',
-    'scality=nova.virt.libvirt.volume.volume.LibvirtScalityVolumeDriver',
+    'scality=nova.virt.libvirt.volume.scality.LibvirtScalityVolumeDriver',
     'gpfs=nova.virt.libvirt.volume.gpfs.LibvirtGPFSVolumeDriver',
     'quobyte=nova.virt.libvirt.volume.quobyte.LibvirtQuobyteVolumeDriver',
 ]
@@ -3154,8 +3154,9 @@ class LibvirtDriver(driver.ComputeDriver):
                 libvirt_utils.get_instance_path(instance), 'rootfs')
             devices.append(fs)
         elif os_type == vm_mode.EXE and CONF.libvirt.virt_type == "parallels":
-            fs = self._get_guest_fs_config(instance, "disk")
-            devices.append(fs)
+            if 'disk' in disk_mapping:
+                fs = self._get_guest_fs_config(instance, "disk")
+                devices.append(fs)
         else:
 
             if rescue:
@@ -4919,11 +4920,13 @@ class LibvirtDriver(driver.ComputeDriver):
 
         :param context: security context
         :param instance: nova.objects.instance.Instance object
-        :returns
-            :tempfile: A dict containing the tempfile info on the destination
-                       host
-            :None: 1. If the instance path is not existing.
-                   2. If the image backend is shared block storage type.
+        :returns:
+         - tempfile: A dict containing the tempfile info on the destination
+                     host
+         - None:
+
+            1. If the instance path is not existing.
+            2. If the image backend is shared block storage type.
         """
         if self.image_backend.backend().is_shared_block_storage():
             return None
