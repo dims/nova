@@ -253,10 +253,12 @@ class WarningsFixture(fixtures.Fixture):
         # NOTE(sdague): Make deprecation warnings only happen once. Otherwise
         # this gets kind of crazy given the way that upstream python libs use
         # this.
-        warnings.simplefilter("once", DeprecationWarning)
-        warnings.filterwarnings('ignore',
-                                message='With-statements now directly support'
-                                        ' multiple context managers')
+
+        warnings.simplefilter("ignore")
+        # warnings.simplefilter("once", DeprecationWarning)
+        # warnings.filterwarnings('ignore',
+        #                         message='With-statements now directly support'
+        #                                 ' multiple context managers')
 
         self.addCleanup(warnings.resetwarnings)
 
