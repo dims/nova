@@ -25,8 +25,11 @@ import contextlib
 import datetime
 import eventlet
 eventlet.monkey_patch(os=False)
+import sys
 import warnings
 warnings.filterwarnings("ignore")
+
+sys.excepthook = lambda *args: None
 
 import copy
 import inspect
