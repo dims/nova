@@ -122,7 +122,7 @@ class MyObjDiffVers(MyObj):
         return 'MyObj'
 
 
-class MyObj2(object):
+class MyObj2(base.NovaObject):
     fields = {
         'bar': fields.StringField(),
     }
@@ -408,7 +408,7 @@ class _TestObject(object):
                      'nova_object.namespace': 'foo',
                      'nova_object.version': '1.5',
                      'nova_object.data': {'foo': 1}}
-        self.assertRaises(exception.UnsupportedObjectError,
+        self.assertRaises(ovo_exc.UnsupportedObjectError,
                           MyObj.obj_from_primitive, primitive)
 
     def test_hydration_additional_unexpected_stuff(self):
@@ -491,14 +491,14 @@ class _TestObject(object):
         self.assertEqual('1.6', obj.VERSION)
 
     def test_unknown_objtype(self):
-        self.assertRaises(exception.UnsupportedObjectError,
+        self.assertRaises(ovo_exc.UnsupportedObjectError,
                           base.NovaObject.obj_class_from_name, 'foo', '1.0')
 
     def test_obj_class_from_name_supported_version(self):
         error = None
         try:
             base.NovaObject.obj_class_from_name('MyObj', '1.25')
-        except exception.IncompatibleObjectVersion as ex:
+        except ovo_exc.IncompatibleObjectVersion as ex:
             error = ex
 
         self.assertIsNotNone(error)
@@ -507,7 +507,7 @@ class _TestObject(object):
     def test_orphaned_object(self):
         obj = MyObj.query(self.context)
         obj._context = None
-        self.assertRaises(exception.OrphanedObjectError,
+        self.assertRaises(ovo_exc.OrphanedObjectError,
                           obj._update_test)
 
     def test_changed_1(self):
@@ -875,7 +875,7 @@ class TestObject(_LocalTest, _TestObject):
 
     def test_set_defaults_no_default(self):
         obj = MyObj()
-        self.assertRaises(exception.ObjectActionError,
+        self.assertRaises(ovo_exc.ObjectActionError,
                           obj.obj_set_defaults, 'bar')
 
     def test_set_all_defaults(self):
@@ -897,12 +897,12 @@ class TestObject(_LocalTest, _TestObject):
 class TestRemoteObject(_RemoteTest, _TestObject):
     def test_major_version_mismatch(self):
         MyObj2.VERSION = '2.0'
-        self.assertRaises(exception.IncompatibleObjectVersion,
+        self.assertRaises(ovo_exc.IncompatibleObjectVersion,
                           MyObj2.query, self.context)
 
     def test_minor_version_greater(self):
         MyObj2.VERSION = '1.7'
-        self.assertRaises(exception.IncompatibleObjectVersion,
+        self.assertRaises(ovo_exc.IncompatibleObjectVersion,
                           MyObj2.query, self.context)
 
     def test_minor_version_less(self):
@@ -1111,8 +1111,8 @@ object_data = {
     'FloatingIPList': '1.8-7f2ba670714e1b7bab462ab3290f7159',
     'HostMapping': '1.0-1a3390a696792a552ab7bd31a77ba9ac',
     'HVSpec': '1.1-6b4f7c0f688cbd03e24142a44eb9010d',
-    'ImageMeta': '1.3-642d1b2eb3e880a367f37d72dd76162d',
-    'ImageMetaProps': '1.3-bcd6a0c4324319982eac3147e10bcf6f',
+    'ImageMeta': '1.4-642d1b2eb3e880a367f37d72dd76162d',
+    'ImageMetaProps': '1.4-ae965c3b7a0ce2dc0f714cfec554ca76',
     'Instance': '1.21-260d385315d4868b6397c61a13109841',
     'InstanceAction': '1.1-f9f293e526b66fca0d05c3b3a2d13914',
     'InstanceActionEvent': '1.1-e56a64fa4710e43ef7af2ad9d6028b33',
@@ -1187,7 +1187,7 @@ object_relationships = {
     'FloatingIP': {'FixedIP': '1.11'},
     'FloatingIPList': {'FloatingIP': '1.7'},
     'HostMapping': {'CellMapping': '1.0'},
-    'ImageMeta': {'ImageMetaProps': '1.3'},
+    'ImageMeta': {'ImageMetaProps': '1.4'},
     'Instance': {'InstanceFault': '1.2',
                  'InstanceInfoCache': '1.5',
                  'InstanceNUMATopology': '1.1',

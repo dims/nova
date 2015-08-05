@@ -280,9 +280,10 @@ libvirt_volume_drivers = [
     'rbd=nova.virt.libvirt.volume.volume.LibvirtNetVolumeDriver',
     'sheepdog=nova.virt.libvirt.volume.volume.LibvirtNetVolumeDriver',
     'nfs=nova.virt.libvirt.volume.volume.LibvirtNFSVolumeDriver',
-    'smbfs=nova.virt.libvirt.volume.volume.LibvirtSMBFSVolumeDriver',
-    'aoe=nova.virt.libvirt.volume.volume.LibvirtAOEVolumeDriver',
-    'glusterfs=nova.virt.libvirt.volume.volume.LibvirtGlusterfsVolumeDriver',
+    'smbfs=nova.virt.libvirt.volume.smbfs.LibvirtSMBFSVolumeDriver',
+    'aoe=nova.virt.libvirt.volume.aoe.LibvirtAOEVolumeDriver',
+    'glusterfs='
+        'nova.virt.libvirt.volume.glusterfs.LibvirtGlusterfsVolumeDriver',
     'fibre_channel='
         'nova.virt.libvirt.volume.fibrechannel.'
         'LibvirtFibreChannelVolumeDriver',
@@ -393,6 +394,9 @@ MIN_QEMU_HYPERV_FEATURE_VERSION = (1, 1, 0)
 
 # parallels driver support
 MIN_LIBVIRT_PARALLELS_VERSION = (1, 2, 12)
+
+# Ability to set the user guest password with Qemu
+MIN_LIBVIRT_SET_ADMIN_PASSWD = (1, 2, 16)
 
 
 class LibvirtDriver(driver.ComputeDriver):
@@ -1413,28 +1417,47 @@ class LibvirtDriver(driver.ComputeDriver):
                 LOG.info(_LI("Snapshot image upload complete"),
                          instance=instance)
 
-    def _can_quiesce(self, image_meta):
-        if CONF.libvirt.virt_type not in ('kvm', 'qemu'):
-            return (False, _('Only KVM and QEMU are supported'))
+    def _can_set_admin_password(self, image_meta):
+        if (CONF.libvirt.virt_type not in ('kvm', 'qemu') or
+            not self._host.has_min_version(MIN_LIBVIRT_SET_ADMIN_PASSWD)):
+            raise exception.SetAdminPasswdNotSupported()
 
-        if not self._host.has_min_version(MIN_LIBVIRT_FSFREEZE_VERSION):
-            ver = ".".join([str(x) for x in MIN_LIBVIRT_FSFREEZE_VERSION])
-            return (False, _('Quiescing requires libvirt version %(version)s '
-                             'or greater') % {'version': ver})
+        hw_qga = image_meta.properties.get('hw_qemu_guest_agent', '')
+        if not strutils.bool_from_string(hw_qga):
+            raise exception.QemuGuestAgentNotEnabled()
+
+    def set_admin_password(self, instance, new_pass):
+        image_meta = objects.ImageMeta.from_instance(instance)
+        self._can_set_admin_password(image_meta)
+
+        guest = self._host.get_guest(instance)
+        if instance.os_type == "windows":
+            user = "Administrator"
+        else:
+            user = "root"
+
+        try:
+            guest.set_user_password(user, new_pass)
+        except libvirt.libvirtError as ex:
+            error_code = ex.get_error_code()
+            msg = (_('Error from libvirt while set password for username '
+                     '"%(user)s": [Error Code %(error_code)s] %(ex)s')
+                   % {'user': user, 'error_code': error_code, 'ex': ex})
+            raise exception.NovaException(msg)
+
+    def _can_quiesce(self, instance, image_meta):
+        if (CONF.libvirt.virt_type not in ('kvm', 'qemu') or
+            not self._host.has_min_version(MIN_LIBVIRT_FSFREEZE_VERSION)):
+            raise exception.InstanceQuiesceNotSupported(
+                instance_id=instance.uuid)
 
         img_meta_prop = image_meta.get('properties', {}) if image_meta else {}
         hw_qga = img_meta_prop.get('hw_qemu_guest_agent', '')
         if not strutils.bool_from_string(hw_qga):
-            return (False, _('QEMU guest agent is not enabled'))
-
-        return (True, None)
+            raise exception.QemuGuestAgentNotEnabled()
 
     def _set_quiesced(self, context, instance, image_meta, quiesced):
-        supported, reason = self._can_quiesce(image_meta)
-        if not supported:
-            raise exception.InstanceQuiesceNotSupported(
-                instance_id=instance.uuid, reason=reason)
-
+        self._can_quiesce(instance, image_meta)
         try:
             guest = self._host.get_guest(instance)
 

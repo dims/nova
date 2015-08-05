@@ -13,10 +13,11 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import os
+import mock
+
+from oslo_concurrency import processutils
 
 from nova import test
-from nova import utils
 from nova.virt.libvirt.storage import dmcrypt
 
 
@@ -32,41 +33,65 @@ class LibvirtDmcryptTestCase(test.NoDBTestCase):
         self.KEY = range(0, self.KEY_SIZE)
         self.KEY_STR = ''.join(["%02x" % x for x in range(0, self.KEY_SIZE)])
 
-        self.executes = []
-        self.kwargs = {}
-
-        def fake_execute(*cmd, **kwargs):
-            self.executes.append(cmd)
-            self.kwargs = kwargs
-            return None, None
-
-        def fake_listdir(path):
-            return [self.TARGET, '/dev/mapper/disk']
-
-        self.stubs.Set(utils, 'execute', fake_execute)
-        self.stubs.Set(os, 'listdir', fake_listdir)
-
-    def test_create_volume(self):
-        expected_commands = [('cryptsetup',
-               'create',
-               self.TARGET,
-               self.PATH,
-               '--cipher=' + self.CIPHER,
-               '--key-size=' + str(self.KEY_SIZE),
-               '--key-file=-')]
+    @mock.patch('nova.utils.execute')
+    def test_create_volume(self, mock_execute):
         dmcrypt.create_volume(self.TARGET, self.PATH, self.CIPHER,
             self.KEY_SIZE, self.KEY)
 
-        self.assertEqual(expected_commands, self.executes)
-        self.assertEqual(self.KEY_STR, self.kwargs['process_input'])
+        mock_execute.assert_has_calls([
+            mock.call('cryptsetup', 'create', self.TARGET, self.PATH,
+                      '--cipher=' + self.CIPHER,
+                      '--key-size=' + str(self.KEY_SIZE),
+                      '--key-file=-', process_input=self.KEY_STR,
+                      run_as_root=True),
+        ])
 
-    def test_delete_volume(self):
-        expected_commands = [('cryptsetup', 'remove', self.TARGET)]
+    @mock.patch('nova.virt.libvirt.storage.dmcrypt.LOG')
+    @mock.patch('nova.utils.execute')
+    def test_create_volume_fail(self, mock_execute, mock_log):
+        mock_execute.side_effect = processutils.ProcessExecutionError()
+
+        self.assertRaises(processutils.ProcessExecutionError,
+                          dmcrypt.create_volume, self.TARGET, self.PATH,
+                          self.CIPHER, self.KEY_SIZE, self.KEY)
+
+        self.assertEqual(1, mock_execute.call_count)
+        self.assertEqual(1, mock_log.error.call_count)  # error logged
+
+    @mock.patch('nova.utils.execute')
+    def test_delete_volume(self, mock_execute):
         dmcrypt.delete_volume(self.TARGET)
 
-        self.assertEqual(expected_commands, self.executes)
+        mock_execute.assert_has_calls([
+            mock.call('cryptsetup', 'remove', self.TARGET, run_as_root=True),
+        ])
 
-    def test_list_volumes(self):
+    @mock.patch('nova.virt.libvirt.storage.dmcrypt.LOG')
+    @mock.patch('nova.utils.execute')
+    def test_delete_volume_fail(self, mock_execute, mock_log):
+        mock_execute.side_effect = processutils.ProcessExecutionError()
+
+        self.assertRaises(processutils.ProcessExecutionError,
+                          dmcrypt.delete_volume, self.TARGET)
+
+        self.assertEqual(1, mock_execute.call_count)
+        self.assertEqual(1, mock_log.error.call_count)  # error logged
+
+    @mock.patch('nova.virt.libvirt.storage.dmcrypt.LOG')
+    @mock.patch('nova.utils.execute')
+    def test_delete_missing_volume(self, mock_execute, mock_log):
+        mock_execute.side_effect = \
+                processutils.ProcessExecutionError(exit_code=4)
+
+        dmcrypt.delete_volume(self.TARGET)
+
+        self.assertEqual(1, mock_log.debug.call_count)
+        self.assertEqual(0, mock_log.error.call_count)
+
+    @mock.patch('os.listdir')
+    def test_list_volumes(self, mock_listdir):
+        mock_listdir.return_value = [self.TARGET, '/dev/mapper/disk']
         encrypted_volumes = dmcrypt.list_volumes()
 
+        self.assertEqual(1, mock_listdir.call_count)
         self.assertEqual([self.TARGET], encrypted_volumes)

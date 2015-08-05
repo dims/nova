@@ -52,7 +52,6 @@ class _TestInstanceObject(object):
                                                  access_ip_v6='::1')
         db_inst['uuid'] = '34fd7606-2ed5-42c7-ad46-76240c088801'
         db_inst['cell_name'] = 'api!child'
-        db_inst['scheduled_at'] = None
         db_inst['terminated_at'] = None
         db_inst['deleted_at'] = None
         db_inst['created_at'] = None
@@ -167,11 +166,6 @@ class _TestInstanceObject(object):
             self.context, 'uuid',
             expected_attrs=instance.INSTANCE_OPTIONAL_ATTRS)
         for attr in instance.INSTANCE_OPTIONAL_ATTRS:
-            if 'flavor' in attr:
-                # FIXME(danms): This isn't implemented yet, but is handled
-                # in the lazy-load code, so code can act like it is (although
-                # this test is being pedantic).
-                continue
             self.assertTrue(inst.obj_attr_is_set(attr))
 
     def test_get_by_id(self):
@@ -424,6 +418,17 @@ class _TestInstanceObject(object):
             inst.pci_requests = None
             inst.save()
             self.assertTrue(save_mock.called)
+
+    @mock.patch('nova.db.instance_update_and_get_original')
+    @mock.patch.object(objects.Instance, '_from_db_object')
+    def test_save_skip_scheduled_at(self, mock_fdo, mock_update):
+        mock_update.return_value = None, None
+        inst = instance.Instance(context=self.context, id=123)
+        inst.uuid = 'foo'
+        inst.scheduled_at = None
+        inst.save()
+        self.assertNotIn('scheduled_at',
+                         mock_update.call_args_list[0][0][2])
 
     @mock.patch('nova.db.instance_update_and_get_original')
     @mock.patch.object(objects.Instance, '_from_db_object')
@@ -823,6 +828,22 @@ class _TestInstanceObject(object):
         inst.obj_reset_changes()
         self.assertEqual(set(), inst.obj_what_changed())
 
+    def test_create_skip_scheduled_at(self):
+        self.mox.StubOutWithMock(db, 'instance_create')
+        vals = {'host': 'foo-host',
+                'memory_mb': 128,
+                'system_metadata': {'foo': 'bar'},
+                'extra': {}}
+        fake_inst = fake_instance.fake_db_instance(**vals)
+        db.instance_create(self.context, vals).AndReturn(fake_inst)
+        self.mox.ReplayAll()
+        inst = instance.Instance(context=self.context,
+                                 host='foo-host', memory_mb=128,
+                                 scheduled_at=None,
+                                 system_metadata={'foo': 'bar'})
+        inst.create()
+        self.assertEqual(inst.host, 'foo-host')
+
     def test_metadata_change_tracking(self):
         self._test_metadata_change_tracking('metadata')
 
@@ -894,8 +915,7 @@ class _TestInstanceObject(object):
                                  project_id=self.context.project_id,
                                  host='foo-host')
         inst.create()
-        self.assertRaises(exception.ObjectActionError, inst.create,
-                          self.context)
+        self.assertRaises(exception.ObjectActionError, inst.create)
 
     def test_create_with_special_things(self):
         self.mox.StubOutWithMock(db, 'instance_create')
@@ -1188,90 +1208,6 @@ class _TestInstanceObject(object):
             self.context, uuid, expected_attrs=['pci_requests'])
         self.assertTrue(inst.obj_attr_is_set('pci_requests'))
 
-    def test_migrate_flavor(self):
-        flavor = flavors.get_default_flavor()
-        flavor.extra_specs = {'speed': '88mph',
-                              'hw:numa_cpus.1': '1'}
-        flavor.save()
-        flavor.extra_specs['hw:numa_cpus.1'] = 123
-        old_flavor = flavors.get_default_flavor()
-        values = {'project_id': self.context.project_id,
-                  'system_metadata': {}}
-        flavors.save_flavor_info(values['system_metadata'], flavor)
-        flavors.save_flavor_info(values['system_metadata'], old_flavor, 'old_')
-        db_inst = db.instance_create(self.context, values)
-        inst = objects.Instance.get_by_uuid(self.context, db_inst['uuid'],
-                                            expected_attrs=['flavor'])
-
-        # The system_metadata flavor should be gone
-        self.assertNotIn('instance_type_id', inst.system_metadata)
-
-        # The flavors should all be set, and match what we expect
-        self.assertEqual(flavor['flavorid'], inst.flavor.flavorid)
-        self.assertEqual(old_flavor['flavorid'], inst.old_flavor.flavorid)
-        self.assertTrue(inst.obj_attr_is_set('new_flavor'))
-        self.assertIsNone(inst.new_flavor)
-
-        # inst.flavor should have merged extra_specs, with its overridden
-        # value for hw:numa_cpus.1
-        self.assertEqual('88mph', inst.flavor.extra_specs['speed'])
-        self.assertEqual('123', inst.flavor.extra_specs['hw:numa_cpus.1'])
-
-        # inst.old_flavor did not have an overridden version
-        self.assertEqual('88mph', inst.old_flavor.extra_specs['speed'])
-        self.assertEqual('1', inst.old_flavor.extra_specs['hw:numa_cpus.1'])
-
-    def test_migrate_flavor_save_load(self):
-        flavor = flavors.get_default_flavor()
-        values = {'project_id': self.context.project_id,
-                  'system_metadata': {}}
-        flavors.save_flavor_info(values['system_metadata'], flavor)
-        db_inst = db.instance_create(self.context, values)
-        inst = objects.Instance.get_by_uuid(self.context, db_inst['uuid'],
-                                            expected_attrs=['flavor'])
-        self.assertNotIn('instance_type_id', inst.system_metadata)
-        self.assertTrue(inst.obj_attr_is_set('flavor'))
-        inst.display_name = 'foo'
-        inst.save()
-        inst = objects.Instance.get_by_uuid(self.context, db_inst['uuid'],
-                                            expected_attrs=['flavor'])
-        self.assertNotIn('instance_type_id', inst.system_metadata)
-        self.assertTrue(inst.obj_attr_is_set('flavor'))
-        extra = db.instance_extra_get_by_instance_uuid(self.context,
-                                                       db_inst['uuid'],
-                                                       columns=['flavor'])
-        self.assertIsNotNone(extra['flavor'])
-
-    def test_migrate_flavor_on_save_when_not_loaded_on_get(self):
-        flavor = flavors.get_default_flavor()
-        values = {'project_id': self.context.project_id,
-                  'system_metadata': {}}
-        flavors.save_flavor_info(values['system_metadata'], flavor)
-        db_inst = db.instance_create(self.context, values)
-        inst = objects.Instance.get_by_uuid(self.context, db_inst['uuid'])
-        self.assertFalse(inst.obj_attr_is_set('system_metadata'))
-        self.assertEqual(flavor['flavorid'], inst.get_flavor().flavorid)
-        self.assertTrue(inst.obj_attr_is_set('system_metadata'))
-        self.assertNotIn('instance_type_id', inst.system_metadata)
-        inst.save()
-        inst = objects.Instance.get_by_uuid(self.context, inst.uuid,
-                                            expected_attrs=['system_metadata'])
-        self.assertNotIn('instance_type_id', inst.system_metadata)
-        extra = db.instance_extra_get_by_instance_uuid(self.context,
-                                                       db_inst['uuid'],
-                                                       columns=['flavor'])
-        self.assertIsNotNone(extra['flavor'])
-
-    def test_lazy_load_flavor_from_existing_sysmeta(self):
-        flavor = flavors.get_default_flavor()
-        # NOTE(danms): Don't set a context to prove we don't require one
-        # in the case where we're loading purely from sysmeta
-        inst = objects.Instance()
-        inst.system_metadata = flavors.save_flavor_info({}, flavor)
-        self.assertEqual(flavor.flavorid, inst.flavor.flavorid)
-        self.assertTrue(inst.obj_attr_is_set('flavor'))
-        self.assertNotIn('instance_type_id', inst.system_metadata)
-
     def test_backport_flavor(self):
         flavor = flavors.get_default_flavor()
         inst = objects.Instance(context=self.context, flavor=flavor,
@@ -1281,60 +1217,6 @@ class _TestInstanceObject(object):
         primitive = inst.obj_to_primitive(target_version='1.17')
         self.assertIn('instance_type_id',
                       primitive['nova_object.data']['system_metadata'])
-
-    def test_migrate_flavor_older_instance(self):
-        flavor = flavors.get_default_flavor()
-        flavorinfo = jsonutils.dumps({'cur': flavor.obj_to_primitive(),
-                                      'old': None, 'new': None})
-        db_inst = {'extra': {'flavor': flavorinfo}}
-        inst = objects.Instance(system_metadata={})
-        inst.VERSION = '1.17'
-        inst._maybe_migrate_flavor(db_inst, ['flavor', 'system_metadata'])
-        self.assertIn('instance_type_id', inst.system_metadata)
-
-    def test_migrate_flavor_instance_no_extra(self):
-        flavor = flavors.get_default_flavor()
-        db_inst = {'extra': None}
-        inst = objects.Instance(
-                system_metadata=flavors.save_flavor_info({}, flavor))
-        result = inst._maybe_migrate_flavor(db_inst,
-                                            ['flavor', 'system_metadata'])
-        self.assertTrue(result, 'Flavor not migrated')
-        self.assertNotIn('instance_type_id', inst.system_metadata)
-        self.assertTrue(inst.obj_attr_is_set('flavor'))
-        self.assertEqual(flavor.flavorid, inst.flavor.flavorid)
-
-    def test_without_extra_record(self):
-        flavor = flavors.get_default_flavor()
-        db_inst = fake_instance.fake_db_instance()
-        db_inst['system_metadata'] = flavors.save_flavor_info({}, flavor)
-        del db_inst['extra']
-        with mock.patch('nova.db.instance_get_by_uuid') as mock_get:
-            mock_get.return_value = db_inst
-            inst = objects.Instance.get_by_uuid(
-                self.context, uuid='foo',
-                expected_attrs=['numa_topology', 'pci_requests', 'vcpu_model',
-                                'flavor'])
-            for field in ('numa_topology', 'pci_requests', 'vcpu_model'):
-                self.assertTrue(inst.obj_attr_is_set(field))
-                self.assertIsNone(getattr(inst, field))
-            self.assertTrue(inst.obj_attr_is_set('flavor'))
-
-    def test_with_null_extra_record(self):
-        flavor = flavors.get_default_flavor()
-        db_inst = fake_instance.fake_db_instance()
-        db_inst['system_metadata'] = flavors.save_flavor_info({}, flavor)
-        db_inst['extra'] = None
-        with mock.patch('nova.db.instance_get_by_uuid') as mock_get:
-            mock_get.return_value = db_inst
-            inst = objects.Instance.get_by_uuid(
-                self.context, uuid='foo',
-                expected_attrs=['numa_topology', 'pci_requests', 'vcpu_model',
-                                'flavor'])
-            for field in ('numa_topology', 'pci_requests', 'vcpu_model'):
-                self.assertTrue(inst.obj_attr_is_set(field))
-                self.assertIsNone(getattr(inst, field))
-            self.assertTrue(inst.obj_attr_is_set('flavor'))
 
 
 class TestInstanceObject(test_objects._LocalTest,
@@ -1412,7 +1294,6 @@ class _TestInstanceListObject(object):
         db_inst = fake_instance.fake_db_instance(id=2,
                                                  access_ip_v4='1.2.3.4',
                                                  access_ip_v6='::1')
-        db_inst['scheduled_at'] = None
         db_inst['terminated_at'] = None
         db_inst['deleted_at'] = None
         db_inst['created_at'] = None
