@@ -252,7 +252,7 @@ CONF.import_opt('proxyclient_address', 'nova.console.serial',
 CONF.import_opt('hw_disk_discard', 'nova.virt.libvirt.imagebackend',
                 group='libvirt')
 CONF.import_group('workarounds', 'nova.utils')
-CONF.import_opt('iscsi_use_multipath', 'nova.virt.libvirt.volume',
+CONF.import_opt('iscsi_use_multipath', 'nova.virt.libvirt.volume.iscsi',
                 group='libvirt')
 
 DEFAULT_FIREWALL_DRIVER = "%s.%s" % (
@@ -273,13 +273,13 @@ GuestNumaConfig = collections.namedtuple(
     'GuestNumaConfig', ['cpuset', 'cputune', 'numaconfig', 'numatune'])
 
 libvirt_volume_drivers = [
-    'iscsi=nova.virt.libvirt.volume.volume.LibvirtISCSIVolumeDriver',
-    'iser=nova.virt.libvirt.volume.volume.LibvirtISERVolumeDriver',
+    'iscsi=nova.virt.libvirt.volume.iscsi.LibvirtISCSIVolumeDriver',
+    'iser=nova.virt.libvirt.volume.iser.LibvirtISERVolumeDriver',
     'local=nova.virt.libvirt.volume.volume.LibvirtVolumeDriver',
     'fake=nova.virt.libvirt.volume.volume.LibvirtFakeVolumeDriver',
-    'rbd=nova.virt.libvirt.volume.volume.LibvirtNetVolumeDriver',
-    'sheepdog=nova.virt.libvirt.volume.volume.LibvirtNetVolumeDriver',
-    'nfs=nova.virt.libvirt.volume.volume.LibvirtNFSVolumeDriver',
+    'rbd=nova.virt.libvirt.volume.net.LibvirtNetVolumeDriver',
+    'sheepdog=nova.virt.libvirt.volume.net.LibvirtNetVolumeDriver',
+    'nfs=nova.virt.libvirt.volume.nfs.LibvirtNFSVolumeDriver',
     'smbfs=nova.virt.libvirt.volume.smbfs.LibvirtSMBFSVolumeDriver',
     'aoe=nova.virt.libvirt.volume.aoe.LibvirtAOEVolumeDriver',
     'glusterfs='
@@ -290,6 +290,7 @@ libvirt_volume_drivers = [
     'scality=nova.virt.libvirt.volume.scality.LibvirtScalityVolumeDriver',
     'gpfs=nova.virt.libvirt.volume.gpfs.LibvirtGPFSVolumeDriver',
     'quobyte=nova.virt.libvirt.volume.quobyte.LibvirtQuobyteVolumeDriver',
+    'hgst=nova.virt.libvirt.volume.hgst.LibvirtHGSTVolumeDriver',
 ]
 
 
@@ -398,6 +399,9 @@ MIN_LIBVIRT_PARALLELS_VERSION = (1, 2, 12)
 # Ability to set the user guest password with Qemu
 MIN_LIBVIRT_SET_ADMIN_PASSWD = (1, 2, 16)
 
+# vhostuser queues support
+MIN_LIBVIRT_VHOSTUSER_MQ = (1, 2, 17)
+
 
 class LibvirtDriver(driver.ComputeDriver):
     capabilities = {
@@ -425,7 +429,10 @@ class LibvirtDriver(driver.ComputeDriver):
             self.virtapi,
             host=self._host)
 
-        self.vif_driver = libvirt_vif.LibvirtGenericVIFDriver()
+        support_vhostuser_mq = self._host.has_min_version(
+                                          MIN_LIBVIRT_VHOSTUSER_MQ)
+        self.vif_driver = libvirt_vif.LibvirtGenericVIFDriver(
+                                    support_vhostuser_mq=support_vhostuser_mq)
 
         self.volume_drivers = driver.driver_dict_from_config(
             self._get_volume_drivers(), self)
@@ -1431,11 +1438,12 @@ class LibvirtDriver(driver.ComputeDriver):
         self._can_set_admin_password(image_meta)
 
         guest = self._host.get_guest(instance)
-        if instance.os_type == "windows":
-            user = "Administrator"
-        else:
-            user = "root"
-
+        user = image_meta.properties.get("os_admin_user")
+        if not user:
+            if instance.os_type == "windows":
+                user = "Administrator"
+            else:
+                user = "root"
         try:
             guest.set_user_password(user, new_pass)
         except libvirt.libvirtError as ex:
@@ -2660,6 +2668,20 @@ class LibvirtDriver(driver.ComputeDriver):
         """
         return ((not bool(instance.get('image_ref')))
                 or 'disk' not in disk_mapping)
+
+    @staticmethod
+    def _has_local_disk(instance, disk_mapping):
+        """Determines whether the VM has a local disk
+
+        Determines whether the disk mapping indicates that the VM
+        has a local disk (e.g. ephemeral, swap disk and config-drive).
+        """
+        if disk_mapping:
+            if ('disk.local' in disk_mapping or
+                'disk.swap' in disk_mapping or
+                'disk.config' in disk_mapping):
+                return True
+        return False
 
     def _inject_data(self, instance, network_info, admin_pass, files, suffix):
         """Injects data in a disk image
@@ -5065,6 +5087,12 @@ class LibvirtDriver(driver.ComputeDriver):
                 self._is_shared_block_storage(instance, dest_check_data,
                                               block_device_info)})
 
+        disk_info_text = self.get_instance_disk_info(
+            instance, block_device_info=block_device_info)
+        booted_from_volume = self._is_booted_from_volume(instance,
+                                                         disk_info_text)
+        has_local_disk = self._has_local_disk(instance, disk_info_text)
+
         if dest_check_data['block_migration']:
             if (dest_check_data['is_shared_block_storage'] or
                     dest_check_data['is_shared_instance_path']):
@@ -5077,9 +5105,12 @@ class LibvirtDriver(driver.ComputeDriver):
                                     block_device_info)
 
         elif not (dest_check_data['is_shared_block_storage'] or
-                  dest_check_data['is_shared_instance_path']):
+                  dest_check_data['is_shared_instance_path'] or
+                  (booted_from_volume and not has_local_disk)):
             reason = _("Live migration can not be used "
-                       "without shared storage.")
+                       "without shared storage except "
+                       "a booted from volume VM which "
+                       "does not have a local disk.")
             raise exception.InvalidSharedStorage(reason=reason, path=source)
 
         # NOTE(mikal): include the instance directory name here because it

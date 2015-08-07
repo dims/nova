@@ -80,8 +80,8 @@ CONF.import_opt('cipher', 'nova.compute.api',
                 group='ephemeral_storage_encryption')
 CONF.import_opt('key_size', 'nova.compute.api',
                 group='ephemeral_storage_encryption')
-CONF.import_opt('rbd_user', 'nova.virt.libvirt.volume.volume', group='libvirt')
-CONF.import_opt('rbd_secret_uuid', 'nova.virt.libvirt.volume.volume',
+CONF.import_opt('rbd_user', 'nova.virt.libvirt.volume.net', group='libvirt')
+CONF.import_opt('rbd_secret_uuid', 'nova.virt.libvirt.volume.net',
                 group='libvirt')
 
 LOG = logging.getLogger(__name__)
@@ -768,11 +768,6 @@ class Rbd(Image):
         return True
 
     def clone(self, context, image_id_or_uri):
-        if not self.driver.supports_layering():
-            reason = _('installed version of librbd does not support cloning')
-            raise exception.ImageUnacceptable(image_id=image_id_or_uri,
-                                              reason=reason)
-
         image_meta = IMAGE_API.get(context, image_id_or_uri,
                                    include_locations=True)
         locations = image_meta['locations']
