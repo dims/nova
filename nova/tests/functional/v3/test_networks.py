@@ -17,11 +17,11 @@ from oslo_config import cfg
 
 from nova.network import api as network_api
 from nova.tests.functional.v3 import api_sample_base
-from nova.tests.unit.api.openstack.compute.contrib import test_networks
+from nova.tests.unit.api.openstack.compute import test_networks
 
 CONF = cfg.CONF
 CONF.import_opt('osapi_compute_extension',
-                'nova.api.openstack.compute.extensions')
+                'nova.api.openstack.compute.legacy_v2.extensions')
 
 
 class NetworksJsonTests(api_sample_base.ApiSampleTestBaseV3):

@@ -1096,7 +1096,6 @@ def dnsdomain_get_all(context):
 ###################
 
 
-@require_admin_context
 @oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True,
                            retry_on_request=True)
 def fixed_ip_associate(context, address, instance_uuid, network_id=None,
@@ -1147,7 +1146,6 @@ def fixed_ip_associate(context, address, instance_uuid, network_id=None,
     return fixed_ip_ref
 
 
-@require_admin_context
 @oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True,
                            retry_on_request=True)
 def fixed_ip_associate_pool(context, network_id, instance_uuid=None,
@@ -2059,13 +2057,9 @@ def instance_get_all_by_filters_sort(context, filters, limit=None, marker=None,
     # paginate query
     if marker is not None:
         try:
-            if deleted:
-                marker = _instance_get_by_uuid(
+            marker = _instance_get_by_uuid(
                     context.elevated(read_deleted='yes'), marker,
                     session=session)
-            else:
-                marker = _instance_get_by_uuid(context,
-                                               marker, session=session)
         except exception.InstanceNotFound:
             raise exception.MarkerNotFound(marker)
     try:
@@ -2412,7 +2406,6 @@ def instance_floating_address_get_all(context, instance_uuid):
 
 
 # NOTE(hanlind): This method can be removed as conductor RPC API moves to v2.0.
-@require_admin_context
 def instance_get_all_hung_in_rebooting(context, reboot_window):
     reboot_window = (timeutils.utcnow() -
                      datetime.timedelta(seconds=reboot_window))

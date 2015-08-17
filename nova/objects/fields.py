@@ -380,6 +380,36 @@ class VersionPredicate(fields.String):
         return value
 
 
+class PciDeviceStatus(Enum):
+
+    AVAILABLE = "available"
+    CLAIMED = "claimed"
+    ALLOCATED = "allocated"
+    REMOVED = "removed"  # The device has been hot-removed and not yet deleted
+    DELETED = "deleted"  # The device is marked not available/deleted.
+
+    ALL = (AVAILABLE, CLAIMED, ALLOCATED, REMOVED, DELETED)
+
+    def __init__(self):
+        super(PciDeviceStatus, self).__init__(
+            valid_values=PciDeviceStatus.ALL)
+
+
+class PciDeviceType(Enum):
+
+    # NOTE(jaypipes): It's silly that the word "type-" is in these constants,
+    # but alas, these were the original constant strings used...
+    STANDARD = "type-PCI"
+    SRIOV_PF = "type-PF"
+    SRIOV_VF = "type-VF"
+
+    ALL = (STANDARD, SRIOV_PF, SRIOV_VF)
+
+    def __init__(self):
+        super(PciDeviceType, self).__init__(
+            valid_values=PciDeviceType.ALL)
+
+
 # NOTE(danms): Remove this on next release of oslo.versionedobjects
 class FlexibleBoolean(fields.Boolean):
     @staticmethod
@@ -536,6 +566,24 @@ class NetworkModel(FieldType):
             ','.join([str(vif['id']) for vif in value]))
 
 
+class NonNegativeFloat(FieldType):
+    @staticmethod
+    def coerce(obj, attr, value):
+        v = float(value)
+        if v < 0:
+            raise ValueError(_('Value must be >= 0 for field %s') % attr)
+        return v
+
+
+class NonNegativeInteger(FieldType):
+    @staticmethod
+    def coerce(obj, attr, value):
+        v = int(value)
+        if v < 0:
+            raise ValueError(_('Value must be >= 0 for field %s') % attr)
+        return v
+
+
 class AutoTypedField(fields.Field):
     AUTO_TYPE = None
 
@@ -652,6 +700,14 @@ class VersionPredicateField(AutoTypedField):
     AUTO_TYPE = VersionPredicate()
 
 
+class PciDeviceStatusField(BaseEnumField):
+    AUTO_TYPE = PciDeviceStatus()
+
+
+class PciDeviceTypeField(BaseEnumField):
+    AUTO_TYPE = PciDeviceType()
+
+
 # FIXME(danms): Remove this after oslo.versionedobjects gets it
 # This is a flexible interpretation of boolean
 # values using common user friendly semantics for
@@ -697,6 +753,14 @@ class ListOfIntegersField(AutoTypedField):
 # FIXME(sbauza): Remove this after oslo.versionedobjects releases it
 class DictOfListOfStringsField(AutoTypedField):
     AUTO_TYPE = Dict(List(fields.String()))
+
+
+class NonNegativeFloatField(AutoTypedField):
+    AUTO_TYPE = NonNegativeFloat()
+
+
+class NonNegativeIntegerField(AutoTypedField):
+    AUTO_TYPE = NonNegativeInteger()
 
 
 # FIXME(danms): Remove this after we convert to oslo.versionedobjects' registry

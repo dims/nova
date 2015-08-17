@@ -257,27 +257,31 @@ class VMUtilsTestCase(test.NoDBTestCase):
 
     @mock.patch("nova.virt.hyperv.vmutils.VMUtils.get_attached_disks")
     def test_get_free_controller_slot(self, mock_get_attached_disks):
-        mock_disk = mock.MagicMock()
-        mock_disk.AddressOnParent = 3
-        mock_get_attached_disks.return_value = [mock_disk]
+        with mock.patch.object(self._vmutils,
+                               '_get_disk_resource_address') as mock_get_addr:
+            mock_get_addr.return_value = 3
+            mock_get_attached_disks.return_value = [mock.sentinel.disk]
 
-        response = self._vmutils.get_free_controller_slot(
-            self._FAKE_CTRL_PATH)
+            response = self._vmutils.get_free_controller_slot(
+                self._FAKE_CTRL_PATH)
 
-        mock_get_attached_disks.assert_called_once_with(
-            self._FAKE_CTRL_PATH)
+            mock_get_attached_disks.assert_called_once_with(
+                self._FAKE_CTRL_PATH)
 
-        self.assertEqual(response, 0)
+            self.assertEqual(response, 0)
 
     def test_get_free_controller_slot_exception(self):
-        fake_drive = mock.MagicMock()
-        type(fake_drive).AddressOnParent = mock.PropertyMock(
-            side_effect=range(constants.SCSI_CONTROLLER_SLOTS_NUMBER))
+        mock_get_address = mock.Mock()
+        mock_get_address.side_effect = range(
+            constants.SCSI_CONTROLLER_SLOTS_NUMBER)
 
-        with mock.patch.object(self._vmutils,
-                'get_attached_disks') as fake_get_attached_disks:
-            fake_get_attached_disks.return_value = (
-                [fake_drive] * constants.SCSI_CONTROLLER_SLOTS_NUMBER)
+        mock_get_attached_disks = mock.Mock()
+        mock_get_attached_disks.return_value = (
+            [mock.sentinel.drive] * constants.SCSI_CONTROLLER_SLOTS_NUMBER)
+
+        with mock.patch.multiple(self._vmutils,
+                                 get_attached_disks=mock_get_attached_disks,
+                                 _get_disk_resource_address=mock_get_address):
             self.assertRaises(vmutils.HyperVException,
                               self._vmutils.get_free_controller_slot,
                               mock.sentinel.scsi_controller_path)
@@ -557,16 +561,24 @@ class VMUtilsTestCase(test.NoDBTestCase):
 
             mock_rm_virt_res.assert_called_with(mock_disk, self._FAKE_VM_PATH)
 
-    def test_get_mounted_disk_resource_from_path(self):
+    def _test_get_mounted_disk_resource_from_path(self, is_physical):
         mock_disk_1 = mock.MagicMock()
         mock_disk_2 = mock.MagicMock()
-        mock_disk_2.HostResource = [self._FAKE_MOUNTED_DISK_PATH]
+        conn_attr = (self._vmutils._PHYS_DISK_CONNECTION_ATTR if is_physical
+                     else self._vmutils._VIRT_DISK_CONNECTION_ATTR)
+        setattr(mock_disk_2, conn_attr, [self._FAKE_MOUNTED_DISK_PATH])
         self._vmutils._conn.query.return_value = [mock_disk_1, mock_disk_2]
 
-        physical_disk = self._vmutils._get_mounted_disk_resource_from_path(
-            self._FAKE_MOUNTED_DISK_PATH, True)
+        mounted_disk = self._vmutils._get_mounted_disk_resource_from_path(
+            self._FAKE_MOUNTED_DISK_PATH, is_physical)
 
-        self.assertEqual(mock_disk_2, physical_disk)
+        self.assertEqual(mock_disk_2, mounted_disk)
+
+    def test_get_physical_mounted_disk_resource_from_path(self):
+        self._test_get_mounted_disk_resource_from_path(is_physical=True)
+
+    def test_get_virtual_mounted_disk_resource_from_path(self):
+        self._test_get_mounted_disk_resource_from_path(is_physical=False)
 
     def test_get_controller_volume_paths(self):
         self._prepare_mock_disk()

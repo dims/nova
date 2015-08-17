@@ -332,11 +332,23 @@ class VMwareVMOps(object):
         extra_specs.cores_per_socket = topology.cores
         return extra_specs
 
+    def _get_esx_host_and_cookies(self, datastore, dc_name, file_path):
+        hosts = datastore.get_connected_hosts(self._session)
+        host = ds_obj.Datastore.choose_host(hosts)
+        host_name = self._session._call_method(vutil, 'get_object_property',
+                                               host, 'name')
+        url = ds_obj.DatastoreURL('https', host_name, file_path, dc_name,
+                                  datastore.name)
+        cookie_header = url.get_transfer_ticket(self._session, 'PUT')
+        name, value = cookie_header.split('=')
+        # TODO(rgerganov): this is a hack to emulate cookiejar until we fix
+        # oslo.vmware to accept plain http headers
+        Cookie = collections.namedtuple('Cookie', ['name', 'value'])
+        return host_name, [Cookie(name, value)]
+
     def _fetch_image_as_file(self, context, vi, image_ds_loc):
         """Download image as an individual file to host via HTTP PUT."""
         session = self._session
-        session_vim = session.vim
-        cookies = session_vim.client.options.transport.cookiejar
 
         LOG.debug("Downloading image file data %(image_id)s to "
                   "%(file_path)s on the data store "
@@ -346,12 +358,24 @@ class VMwareVMOps(object):
                    'datastore_name': vi.datastore.name},
                   instance=vi.instance)
 
+        # try to get esx cookie to upload
+        try:
+            dc_name = 'ha-datacenter'
+            host, cookies = self._get_esx_host_and_cookies(vi.datastore,
+                                                        dc_name,
+                                                        image_ds_loc.rel_path)
+        except Exception as e:
+            LOG.warning(_LW("Get esx cookies failed: %s"), e)
+            dc_name = vi.dc_info.name
+            host = self._session._host
+            cookies = session.vim.client.options.transport.cookiejar
+
         images.fetch_image(
             context,
             vi.instance,
-            session._host,
+            host,
             session._port,
-            vi.dc_info.name,
+            dc_name,
             vi.datastore.name,
             image_ds_loc.rel_path,
             cookies=cookies)
@@ -465,6 +489,9 @@ class VMwareVMOps(object):
         self._move_to_cache(vi.dc_info.ref,
                             tmp_image_ds_loc.parent,
                             vi.cache_image_folder)
+        # The size of the image is different from the size of the virtual
+        # disk. We want to use the latter.
+        self._update_image_size(vi)
 
     def _cache_flat_image(self, vi, tmp_image_ds_loc):
         self._move_to_cache(vi.dc_info.ref,
@@ -627,6 +654,20 @@ class VMwareVMOps(object):
             for index, vif in enumerate(network_info):
                 self._network_api.update_instance_vnic_index(
                     context, instance, vif, index)
+
+    def _update_image_size(self, vi):
+        """Updates the file size of the specified image."""
+        # The size of the Glance image is different from the deployed VMDK
+        # size for sparse, streamOptimized and OVA images. We need to retrieve
+        # the size of the flat VMDK and update the file_size property of the
+        # image. This ensures that further operations involving size checks
+        # and disk resizing will work as expected.
+        ds_browser = self._get_ds_browser(vi.datastore.ref)
+        flat_file = "%s-flat.vmdk" % vi.ii.image_id
+        new_size = ds_util.file_size(self._session, ds_browser,
+                                     vi.cache_image_folder, flat_file)
+        if new_size is not None:
+            vi.ii.file_size = new_size
 
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, network_info, block_device_info=None):
@@ -881,14 +922,12 @@ class VMwareVMOps(object):
                 raise error_util.NoRootDiskDefined()
 
             lst_properties = ["datastore", "summary.config.guestId"]
-            props = self._session._call_method(vim_util,
-                                               "get_object_properties",
-                                               None, vm_ref, "VirtualMachine",
+            props = self._session._call_method(vutil,
+                                               "get_object_properties_dict",
+                                               vm_ref,
                                                lst_properties)
-            query = vm_util.get_values_from_object_properties(self._session,
-                                                              props)
-            os_type = query['summary.config.guestId']
-            datastores = query['datastore']
+            os_type = props['summary.config.guestId']
+            datastores = props['datastore']
             return (vmdk, datastores, os_type)
 
         vmdk, datastores, os_type = _get_vm_and_vmdk_attribs()
@@ -926,13 +965,13 @@ class VMwareVMOps(object):
         vm_ref = vm_util.get_vm_ref(self._session, instance)
         lst_properties = ["summary.guest.toolsStatus", "runtime.powerState",
                           "summary.guest.toolsRunningStatus"]
-        props = self._session._call_method(vim_util, "get_object_properties",
-                           None, vm_ref, "VirtualMachine",
-                           lst_properties)
-        query = vm_util.get_values_from_object_properties(self._session, props)
-        pwr_state = query['runtime.powerState']
-        tools_status = query['summary.guest.toolsStatus']
-        tools_running_status = query['summary.guest.toolsRunningStatus']
+        props = self._session._call_method(vutil,
+                                           "get_object_properties_dict",
+                                           vm_ref,
+                                           lst_properties)
+        pwr_state = props['runtime.powerState']
+        tools_status = props['summary.guest.toolsStatus']
+        tools_running_status = props['summary.guest.toolsRunningStatus']
 
         # Raise an exception if the VM is not powered On.
         if pwr_state not in ["poweredOn"]:
@@ -961,14 +1000,13 @@ class VMwareVMOps(object):
             vm_ref = vm_util.get_vm_ref(self._session, instance)
             lst_properties = ["config.files.vmPathName", "runtime.powerState",
                               "datastore"]
-            props = self._session._call_method(vim_util,
-                        "get_object_properties",
-                        None, vm_ref, "VirtualMachine", lst_properties)
-            query = vm_util.get_values_from_object_properties(
-                    self._session, props)
-            pwr_state = query['runtime.powerState']
+            props = self._session._call_method(vutil,
+                                               "get_object_properties_dict",
+                                               vm_ref,
+                                               lst_properties)
+            pwr_state = props['runtime.powerState']
 
-            vm_config_pathname = query.get('config.files.vmPathName')
+            vm_config_pathname = props.get('config.files.vmPathName')
             vm_ds_path = None
             if vm_config_pathname is not None:
                 vm_ds_path = ds_obj.DatastorePath.parse(
@@ -997,7 +1035,7 @@ class VMwareVMOps(object):
                               "datastore %(datastore_name)s",
                               {'datastore_name': vm_ds_path.datastore},
                               instance=instance)
-                    ds_ref_ret = query['datastore']
+                    ds_ref_ret = props['datastore']
                     ds_ref = ds_ref_ret.ManagedObjectReference[0]
                     dc_info = self.get_datacenter_ref_and_name(ds_ref)
                     ds_util.file_delete(self._session,
@@ -1413,15 +1451,14 @@ class VMwareVMOps(object):
         lst_properties = ["summary.config.numCpu",
                     "summary.config.memorySizeMB",
                     "runtime.powerState"]
-        vm_props = self._session._call_method(vim_util,
-                    "get_object_properties", None, vm_ref, "VirtualMachine",
-                    lst_properties)
-        query = vm_util.get_values_from_object_properties(
-                self._session, vm_props)
-        max_mem = int(query.get('summary.config.memorySizeMB', 0)) * 1024
-        num_cpu = int(query.get('summary.config.numCpu', 0))
+        vm_props = self._session._call_method(vutil,
+                                              "get_object_properties_dict",
+                                              vm_ref,
+                                              lst_properties)
+        max_mem = int(vm_props.get('summary.config.memorySizeMB', 0)) * 1024
+        num_cpu = int(vm_props.get('summary.config.numCpu', 0))
         return hardware.InstanceInfo(
-            state=VMWARE_POWER_STATES[query['runtime.powerState']],
+            state=VMWARE_POWER_STATES[vm_props['runtime.powerState']],
             max_mem_kb=max_mem,
             mem_kb=max_mem,
             num_cpu=num_cpu)
@@ -1432,14 +1469,13 @@ class VMwareVMOps(object):
         lst_properties = ["summary.config",
                           "summary.quickStats",
                           "summary.runtime"]
-        vm_props = self._session._call_method(vim_util,
-                    "get_object_properties", None, vm_ref, "VirtualMachine",
-                    lst_properties)
-        query = vm_util.get_values_from_object_properties(self._session,
-                                                          vm_props)
+        vm_props = self._session._call_method(vutil,
+                                              "get_object_properties_dict",
+                                              vm_ref,
+                                              lst_properties)
         data = {}
         # All of values received are objects. Convert them to dictionaries
-        for value in query.values():
+        for value in vm_props.values():
             prop_dict = vim_util.object_to_dict(value, list_depth=1)
             data.update(prop_dict)
         return data

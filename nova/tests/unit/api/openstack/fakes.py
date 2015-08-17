@@ -31,7 +31,7 @@ from nova.api import openstack as openstack_api
 from nova.api.openstack import api_version_request as api_version
 from nova.api.openstack import auth
 from nova.api.openstack import compute
-from nova.api.openstack.compute import limits
+from nova.api.openstack.compute.legacy_v2 import limits
 from nova.api.openstack.compute import versions
 from nova.api.openstack import urlmap
 from nova.api.openstack import wsgi as os_wsgi
@@ -105,9 +105,12 @@ def wsgi_app(inner_app_v2=None, fake_auth_context=None,
 
 
 def wsgi_app_v21(inner_app_v21=None, fake_auth_context=None,
-        use_no_auth=False, ext_mgr=None, init_only=None):
+        use_no_auth=False, ext_mgr=None, init_only=None, v2_compatible=False):
     if not inner_app_v21:
         inner_app_v21 = compute.APIRouterV21(init_only)
+
+    if v2_compatible:
+        inner_app_v21 = openstack_api.LegacyV2CompatibleWrapper(inner_app_v21)
 
     if use_no_auth:
         api_v21 = openstack_api.FaultWrapper(auth.NoAuthMiddlewareV3(
@@ -123,6 +126,7 @@ def wsgi_app_v21(inner_app_v21=None, fake_auth_context=None,
     mapper = urlmap.URLMap()
     mapper['/v2'] = api_v21
     mapper['/v2.1'] = api_v21
+    mapper['/'] = openstack_api.FaultWrapper(versions.Versions())
     return mapper
 
 
@@ -153,11 +157,9 @@ def stub_out_rate_limiting(stubs):
         super(limits.RateLimitingMiddleware, self).__init__(app)
         self.application = app
 
-    stubs.Set(nova.api.openstack.compute.limits.RateLimitingMiddleware,
-        '__init__', fake_rate_init)
-
-    stubs.Set(nova.api.openstack.compute.limits.RateLimitingMiddleware,
-        '__call__', fake_wsgi)
+    v2_limits = nova.api.openstack.compute.legacy_v2.limits
+    stubs.Set(v2_limits.RateLimitingMiddleware, '__init__', fake_rate_init)
+    stubs.Set(v2_limits.RateLimitingMiddleware, '__call__', fake_wsgi)
 
 
 def stub_out_instance_quota(stubs, allowed, quota, resource='instances'):

@@ -591,6 +591,9 @@ class Domain(object):
                 error_code=VIR_ERR_INTERNAL_ERROR,
                 error_domain=VIR_FROM_QEMU)
 
+    def migrateSetMaxDowntime(self, downtime):
+        pass
+
     def attachDevice(self, xml):
         disk_info = _parse_disk_info(etree.fromstring(xml))
         disk_info['_attached'] = True
@@ -757,13 +760,18 @@ class Domain(object):
         return 0
 
     def jobInfo(self):
-        return []
+        # NOTE(danms): This is an array of 12 integers, so just report
+        # something to avoid an IndexError if we look at this
+        return [0] * 12
 
     def jobStats(self, flags=0):
         return {}
 
     def injectNMI(self, flags=0):
         return 0
+
+    def abortJob(self):
+        pass
 
 
 class DomainSnapshot(object):

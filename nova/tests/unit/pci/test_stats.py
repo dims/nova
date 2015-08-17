@@ -13,14 +13,11 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import mock
-
 import six
 
 from nova import exception
 from nova import objects
 from nova.pci import stats
-from nova.pci import whitelist
 from nova import test
 from nova.tests.unit.pci import fakes
 fake_pci_1 = {
@@ -159,9 +156,8 @@ class PciDeviceStatsTestCase(test.NoDBTestCase):
         self.assertEqual(0, len(devs))
 
     def test_consume_requests_failed(self):
-        self.assertRaises(exception.PciDeviceRequestFailed,
-            self.pci_stats.consume_requests,
-            pci_requests_multiple)
+        self.assertIsNone(self.pci_stats.consume_requests(
+                          pci_requests_multiple))
 
     def test_support_requests_numa(self):
         cells = [objects.NUMACell(id=0, cpuset=set(), memory=0),
@@ -191,9 +187,7 @@ class PciDeviceStatsTestCase(test.NoDBTestCase):
 
     def test_consume_requests_numa_failed(self):
         cells = [objects.NUMACell(id=0, cpuset=set(), memory=0)]
-        self.assertRaises(exception.PciDeviceRequestFailed,
-            self.pci_stats.consume_requests,
-            pci_requests, cells)
+        self.assertIsNone(self.pci_stats.consume_requests(pci_requests, cells))
 
     def test_consume_requests_no_numa_info(self):
         cells = [objects.NUMACell(id=0, cpuset=set(), memory=0)]
@@ -205,19 +199,15 @@ class PciDeviceStatsTestCase(test.NoDBTestCase):
                          set([dev.vendor_id for dev in devs]))
 
 
-@mock.patch.object(whitelist, 'get_pci_devices_filter')
 class PciDeviceStatsWithTagsTestCase(test.NoDBTestCase):
 
     def setUp(self):
         super(PciDeviceStatsWithTagsTestCase, self).setUp()
-        self.pci_stats = stats.PciDeviceStats()
-        self._create_whitelist()
-
-    def _create_whitelist(self):
         white_list = ['{"vendor_id":"1137","product_id":"0071",'
                         '"address":"*:0a:00.*","physical_network":"physnet1"}',
                        '{"vendor_id":"1137","product_id":"0072"}']
-        self.pci_wlist = whitelist.PciHostDevicesWhiteList(white_list)
+        self.flags(pci_passthrough_whitelist=white_list)
+        self.pci_stats = stats.PciDeviceStats()
 
     def _create_pci_devices(self):
         self.pci_tagged_devices = []
@@ -270,13 +260,11 @@ class PciDeviceStatsWithTagsTestCase(test.NoDBTestCase):
         self.assertEqual(self.pci_tagged_devices,
                          self.pci_stats.pools[1]['devices'])
 
-    def test_add_devices(self, mock_get_dev_filter):
-        mock_get_dev_filter.return_value = self.pci_wlist
+    def test_add_devices(self):
         self._create_pci_devices()
         self._assertPools()
 
-    def test_consume_reqeusts(self, mock_get_dev_filter):
-        mock_get_dev_filter.return_value = self.pci_wlist
+    def test_consume_reqeusts(self):
         self._create_pci_devices()
         pci_requests = [objects.InstancePCIRequest(count=1,
                             spec=[{'physical_network': 'physnet1'}]),
@@ -291,8 +279,7 @@ class PciDeviceStatsWithTagsTestCase(test.NoDBTestCase):
         self._assertPoolContent(self.pci_stats.pools[1], '1137', '0071', 3,
                                 physical_network='physnet1')
 
-    def test_add_device_no_devspec(self, mock_get_dev_filter):
-        mock_get_dev_filter.return_value = self.pci_wlist
+    def test_add_device_no_devspec(self):
         self._create_pci_devices()
         pci_dev = {'compute_node_id': 1,
                    'address': '0000:0c:00.1',
@@ -307,8 +294,7 @@ class PciDeviceStatsWithTagsTestCase(test.NoDBTestCase):
             self.pci_stats._create_pool_keys_from_dev(pci_dev_obj))
         self._assertPools()
 
-    def test_remove_device_no_devspec(self, mock_get_dev_filter):
-        mock_get_dev_filter.return_value = self.pci_wlist
+    def test_remove_device_no_devspec(self):
         self._create_pci_devices()
         pci_dev = {'compute_node_id': 1,
                    'address': '0000:0c:00.1',
@@ -323,8 +309,7 @@ class PciDeviceStatsWithTagsTestCase(test.NoDBTestCase):
             self.pci_stats._create_pool_keys_from_dev(pci_dev_obj))
         self._assertPools()
 
-    def test_remove_device(self, mock_get_dev_filter):
-        mock_get_dev_filter.return_value = self.pci_wlist
+    def test_remove_device(self):
         self._create_pci_devices()
         dev1 = self.pci_untagged_devices.pop()
         self.pci_stats.remove_device(dev1)

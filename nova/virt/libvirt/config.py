@@ -509,6 +509,7 @@ class LibvirtConfigGuestCPUNUMACell(LibvirtConfigObject):
         self.id = None
         self.cpus = None
         self.memory = None
+        self.memAccess = None
 
     def parse_dom(self, xmldoc):
         if xmldoc.get("id") is not None:
@@ -517,6 +518,7 @@ class LibvirtConfigGuestCPUNUMACell(LibvirtConfigObject):
             self.memory = int(xmldoc.get("memory"))
         if xmldoc.get("cpus") is not None:
             self.cpus = hardware.parse_cpu_spec(xmldoc.get("cpus"))
+        self.memAccess = xmldoc.get("memAccess")
 
     def format_dom(self):
         cell = super(LibvirtConfigGuestCPUNUMACell, self).format_dom()
@@ -528,6 +530,8 @@ class LibvirtConfigGuestCPUNUMACell(LibvirtConfigObject):
                      hardware.format_cpu_spec(self.cpus))
         if self.memory is not None:
             cell.set("memory", str(self.memory))
+        if self.memAccess is not None:
+            cell.set("memAccess", self.memAccess)
 
         return cell
 
@@ -731,6 +735,7 @@ class LibvirtConfigGuestDisk(LibvirtConfigGuestDevice):
         self.logical_block_size = None
         self.physical_block_size = None
         self.readonly = False
+        self.shareable = False
         self.snapshot = None
         self.backing_store = None
 
@@ -832,6 +837,8 @@ class LibvirtConfigGuestDisk(LibvirtConfigGuestDevice):
 
         if self.readonly:
             dev.append(etree.Element("readonly"))
+        if self.shareable:
+            dev.append(etree.Element("shareable"))
 
         return dev
 
@@ -875,6 +882,10 @@ class LibvirtConfigGuestDisk(LibvirtConfigGuestDevice):
                 b = LibvirtConfigGuestDiskBackingStore()
                 b.parse_dom(c)
                 self.backing_store = b
+            elif c.tag == 'readonly':
+                self.readonly = True
+            elif c.tag == 'shareable':
+                self.shareable = True
 
 
 class LibvirtConfigGuestDiskBackingStore(LibvirtConfigObject):

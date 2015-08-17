@@ -47,6 +47,7 @@ from nova import test
 from nova.tests.unit.compute import fake_resource_tracker
 from nova.tests.unit import fake_block_device
 from nova.tests.unit import fake_instance
+from nova.tests.unit import fake_network_cache_model
 from nova.tests.unit import fake_server_actions
 from nova.tests.unit.objects import test_instance_fault
 from nova.tests.unit.objects import test_instance_info_cache
@@ -538,7 +539,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
             mock.patch.object(self.compute.driver, 'plug_vifs',
                 side_effect=exception.VirtualInterfacePlugException(
                     "Unexpected vif_type=binding_failed")),
-            mock.patch.object(self.compute, '_set_instance_error_state')
+            mock.patch.object(self.compute, '_set_instance_obj_error_state')
         ) as (get_admin_context, get_nw_info, plug_vifs, set_error_state):
             self.compute._init_instance(self.context, instance)
             set_error_state.assert_called_once_with(self.context, instance)
@@ -584,7 +585,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         self.mox.StubOutWithMock(self.compute,
                                  '_get_instance_block_device_info')
         self.mox.StubOutWithMock(self.compute,
-                                 '_set_instance_error_state')
+                                 '_set_instance_obj_error_state')
         self.compute._get_power_state(mox.IgnoreArg(),
                 instance).AndReturn(power_state.SHUTDOWN)
         self.compute._get_power_state(mox.IgnoreArg(),
@@ -597,7 +598,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         self.compute.driver.resume_state_on_host_boot(mox.IgnoreArg(),
                 instance, mox.IgnoreArg(),
                 'fake-bdm').AndRaise(test.TestingException)
-        self.compute._set_instance_error_state(mox.IgnoreArg(), instance)
+        self.compute._set_instance_obj_error_state(mox.IgnoreArg(), instance)
         self.mox.ReplayAll()
         self.compute._init_instance('fake-context', instance)
 
@@ -663,7 +664,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
 
         mock_delete_instance = _create_patch(self.compute, '_delete_instance')
         mock_set_instance_error_state = _create_patch(
-            self.compute, '_set_instance_error_state')
+            self.compute, '_set_instance_obj_error_state')
         mock_create_reservations = _create_patch(self.compute,
                                                  '_create_reservations')
 
@@ -1447,7 +1448,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         f_instance.info_cache.network_info = []
 
         @mock.patch.object(compute_utils, 'add_instance_fault_from_exc')
-        @mock.patch.object(self.compute, '_set_instance_error_state')
+        @mock.patch.object(self.compute, '_set_instance_obj_error_state')
         def do_test(meth, add_fault):
             self.assertRaises(exception.PortNotFound,
                               self.compute.detach_interface,
@@ -1567,7 +1568,8 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         self.assertEqual(volumes[old_volume_id]['status'], 'in-use')
         self.assertEqual(volumes[new_volume_id]['status'], 'available')
 
-    def test_check_can_live_migrate_source(self):
+    @mock.patch.object(compute_utils, 'EventReporter')
+    def test_check_can_live_migrate_source(self, event_mock):
         is_volume_backed = 'volume_backed'
         dest_check_data = dict(foo='bar')
         db_instance = fake_instance.fake_db_instance()
@@ -1597,8 +1599,13 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         self.compute.check_can_live_migrate_source(
                 self.context, instance=instance,
                 dest_check_data=dest_check_data)
+        event_mock.assert_called_once_with(
+            self.context, 'compute_check_can_live_migrate_source',
+            instance.uuid)
 
-    def _test_check_can_live_migrate_destination(self, do_raise=False,
+    @mock.patch.object(compute_utils, 'EventReporter')
+    def _test_check_can_live_migrate_destination(self, event_mock,
+                                                 do_raise=False,
                                                  has_mig_data=False):
         db_instance = fake_instance.fake_db_instance(host='fake-host')
         instance = objects.Instance._from_db_object(
@@ -1651,6 +1658,9 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
                 block_migration=block_migration,
                 disk_over_commit=disk_over_commit)
         self.assertEqual(expected_result, result)
+        event_mock.assert_called_once_with(
+            self.context, 'compute_check_can_live_migrate_destination',
+            instance.uuid)
 
     def test_check_can_live_migrate_destination_success(self):
         self._test_check_can_live_migrate_destination()
@@ -1744,27 +1754,107 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
         self.assertEqual(event_obj, event.wait())
         self.assertEqual({}, self.compute.instance_events._events)
 
+    def test_process_instance_vif_deleted_event(self):
+        vif1 = fake_network_cache_model.new_vif()
+        vif1['id'] = '1'
+        vif2 = fake_network_cache_model.new_vif()
+        vif2['id'] = '2'
+        nw_info = network_model.NetworkInfo([vif1, vif2])
+        info_cache = objects.InstanceInfoCache(network_info=nw_info,
+                                               instance_uuid='uuid')
+        inst_obj = objects.Instance(id=3, uuid='uuid', info_cache=info_cache)
+
+        @mock.patch.object(manager.base_net_api,
+                           'update_instance_cache_with_nw_info')
+        @mock.patch.object(self.compute.driver, 'detach_interface')
+        def do_test(detach_interface, update_instance_cache_with_nw_info):
+            self.compute._process_instance_vif_deleted_event(self.context,
+                                                             inst_obj,
+                                                             vif2['id'])
+            update_instance_cache_with_nw_info.assert_called_once_with(
+                                                   self.compute.network_api,
+                                                   self.context,
+                                                   inst_obj,
+                                                   nw_info=[vif1])
+            detach_interface.assert_called_once_with(inst_obj, vif2)
+        do_test()
+
     def test_external_instance_event(self):
         instances = [
             objects.Instance(id=1, uuid='uuid1'),
-            objects.Instance(id=2, uuid='uuid2')]
+            objects.Instance(id=2, uuid='uuid2'),
+            objects.Instance(id=3, uuid='uuid3')]
         events = [
             objects.InstanceExternalEvent(name='network-changed',
                                           tag='tag1',
                                           instance_uuid='uuid1'),
             objects.InstanceExternalEvent(name='network-vif-plugged',
                                           instance_uuid='uuid2',
-                                          tag='tag2')]
+                                          tag='tag2'),
+            objects.InstanceExternalEvent(name='network-vif-deleted',
+                                          instance_uuid='uuid3',
+                                          tag='tag3')]
 
+        @mock.patch.object(self.compute, '_process_instance_vif_deleted_event')
         @mock.patch.object(self.compute.network_api, 'get_instance_nw_info')
         @mock.patch.object(self.compute, '_process_instance_event')
-        def do_test(_process_instance_event, get_instance_nw_info):
+        def do_test(_process_instance_event, get_instance_nw_info,
+                    _process_instance_vif_deleted_event):
             self.compute.external_instance_event(self.context,
                                                  instances, events)
             get_instance_nw_info.assert_called_once_with(self.context,
                                                          instances[0])
             _process_instance_event.assert_called_once_with(instances[1],
                                                             events[1])
+            _process_instance_vif_deleted_event.assert_called_once_with(
+                self.context, instances[2], events[2].tag)
+        do_test()
+
+    def test_external_instance_event_with_exception(self):
+        vif1 = fake_network_cache_model.new_vif()
+        vif1['id'] = '1'
+        vif2 = fake_network_cache_model.new_vif()
+        vif2['id'] = '2'
+        nw_info = network_model.NetworkInfo([vif1, vif2])
+        info_cache = objects.InstanceInfoCache(network_info=nw_info,
+                                               instance_uuid='uuid2')
+        instances = [
+            objects.Instance(id=1, uuid='uuid1'),
+            objects.Instance(id=2, uuid='uuid2', info_cache=info_cache),
+            objects.Instance(id=3, uuid='uuid3')]
+        events = [
+            objects.InstanceExternalEvent(name='network-changed',
+                                          tag='tag1',
+                                          instance_uuid='uuid1'),
+            objects.InstanceExternalEvent(name='network-vif-deleted',
+                                          instance_uuid='uuid2',
+                                          tag='2'),
+            objects.InstanceExternalEvent(name='network-vif-plugged',
+                                          instance_uuid='uuid3',
+                                          tag='tag3')]
+
+        # Make sure all the three events are handled despite the exception in
+        # processing event 2
+        @mock.patch.object(manager.base_net_api,
+                           'update_instance_cache_with_nw_info')
+        @mock.patch.object(self.compute.driver, 'detach_interface',
+                           side_effect=exception.NovaException)
+        @mock.patch.object(self.compute.network_api, 'get_instance_nw_info')
+        @mock.patch.object(self.compute, '_process_instance_event')
+        def do_test(_process_instance_event, get_instance_nw_info,
+                    detach_interface, update_instance_cache_with_nw_info):
+            self.compute.external_instance_event(self.context,
+                                                 instances, events)
+            get_instance_nw_info.assert_called_once_with(self.context,
+                                                         instances[0])
+            update_instance_cache_with_nw_info.assert_called_once_with(
+                                                   self.compute.network_api,
+                                                   self.context,
+                                                   instances[1],
+                                                   nw_info=[vif1])
+            detach_interface.assert_called_once_with(instances[1], vif2)
+            _process_instance_event.assert_called_once_with(instances[2],
+                                                            events[2])
         do_test()
 
     def test_cancel_all_events(self):
@@ -2251,7 +2341,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
             vm_state=vm_states.ACTIVE, task_state=None)
 
     @mock.patch('nova.compute.manager.ComputeManager.'
-                '_set_instance_error_state')
+                '_set_instance_obj_error_state')
     def test_error_out_instance_on_exception_unknown_with_quotas(self,
                                                                  set_error):
         instance = fake_instance.fake_instance_obj(self.context)
@@ -3647,10 +3737,11 @@ class ComputeManagerMigrationTestCase(test.NoDBTestCase):
                               side_effect=exception.ResizeError(reason='')),
             mock.patch.object(db, 'instance_fault_create'),
             mock.patch.object(self.compute, '_instance_update'),
+            mock.patch.object(self.instance, 'save'),
             mock.patch.object(self.migration, 'save'),
             mock.patch.object(self.migration, 'obj_as_admin',
                               return_value=mock.MagicMock())
-        ) as (meth, fault_create, instance_update,
+        ) as (meth, fault_create, instance_update, instance_save,
               migration_save, migration_obj_as_admin):
             fault_create.return_value = (
                 test_instance_fault.fake_faults['fake-uuid'][0])
@@ -3776,3 +3867,56 @@ class ComputeManagerMigrationTestCase(test.NoDBTestCase):
             self.flags(enabled=True, group=console)
             self.assertTrue(self.compute._consoles_enabled())
             self.flags(enabled=False, group=console)
+
+    @mock.patch('nova.utils.spawn_n')
+    @mock.patch('nova.compute.manager.ComputeManager.'
+                '_do_live_migration')
+    def _test_max_concurrent_live(self, mock_lm, mock_spawn):
+        mock_spawn.side_effect = lambda f, *a, **k: f(*a, **k)
+
+        @mock.patch('nova.objects.Migration.save')
+        def _do_it(mock_mig_save):
+            instance = objects.Instance(uuid=str(uuid.uuid4()))
+            migration = objects.Migration()
+            self.compute.live_migration(self.context,
+                                        mock.sentinel.dest,
+                                        instance,
+                                        mock.sentinel.block_migration,
+                                        migration,
+                                        mock.sentinel.migrate_data)
+            self.assertEqual('queued', migration.status)
+            migration.save.assert_called_once_with()
+
+        with mock.patch.object(self.compute,
+                               '_live_migration_semaphore') as mock_sem:
+            for i in (1, 2, 3):
+                _do_it()
+        self.assertEqual(3, mock_sem.__enter__.call_count)
+
+    def test_max_concurrent_live_limited(self):
+        self.flags(max_concurrent_live_migrations=2)
+        self._test_max_concurrent_live()
+
+    def test_max_concurrent_live_unlimited(self):
+        self.flags(max_concurrent_live_migrations=0)
+        self._test_max_concurrent_live()
+
+    def test_max_concurrent_live_semaphore_limited(self):
+        self.flags(max_concurrent_live_migrations=123)
+        self.assertEqual(
+            123,
+            manager.ComputeManager()._live_migration_semaphore.balance)
+
+    def test_max_concurrent_live_semaphore_unlimited(self):
+        self.flags(max_concurrent_live_migrations=0)
+        compute = manager.ComputeManager()
+        self.assertEqual(0, compute._live_migration_semaphore.balance)
+        self.assertIsInstance(compute._live_migration_semaphore,
+                              compute_utils.UnlimitedSemaphore)
+
+    def test_max_concurrent_live_semaphore_negative(self):
+        self.flags(max_concurrent_live_migrations=-2)
+        compute = manager.ComputeManager()
+        self.assertEqual(0, compute._live_migration_semaphore.balance)
+        self.assertIsInstance(compute._live_migration_semaphore,
+                              compute_utils.UnlimitedSemaphore)

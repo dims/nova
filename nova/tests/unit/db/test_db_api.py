@@ -59,6 +59,7 @@ from nova.db.sqlalchemy import types as col_types
 from nova.db.sqlalchemy import utils as db_utils
 from nova import exception
 from nova import objects
+from nova.objects import fields
 from nova import quota
 from nova import test
 from nova.tests.unit import matchers
@@ -1009,6 +1010,18 @@ class SqlAlchemyDbApiNoDbTestCase(test.NoDBTestCase):
         mock_create_facade.assert_called_once_with(sqlalchemy_api._API_FACADE,
                 CONF.api_database)
         mock_facade.get_session.assert_called_once_with()
+
+    @mock.patch.object(sqlalchemy_api, '_instance_get_by_uuid')
+    @mock.patch.object(sqlalchemy_api, '_instances_fill_metadata')
+    @mock.patch('oslo_db.sqlalchemy.utils.paginate_query')
+    def test_instance_get_all_by_filters_paginated_allows_deleted_marker(
+            self, mock_paginate, mock_fill, mock_get):
+        ctxt = mock.MagicMock()
+        ctxt.elevated.return_value = mock.sentinel.elevated
+        sqlalchemy_api.instance_get_all_by_filters_sort(ctxt, {}, marker='foo')
+        mock_get.assert_called_once_with(mock.sentinel.elevated,
+                                         'foo', session=mock.ANY)
+        ctxt.elevated.assert_called_once_with(read_deleted='yes')
 
 
 class SqlAlchemyDbApiTestCase(DbTestCase):
@@ -2142,6 +2155,14 @@ class InstanceTestCase(test.TestCase, ModelsObjectComparatorMixin):
         result = db.instance_get_all_by_filters(self.ctxt,
                                                 {'changes-since':
                                                  changes_since})
+        self._assertEqualListsOfInstances([i2], result)
+
+        db.instance_destroy(self.ctxt, i1['uuid'])
+        filters = {}
+        filters['changes-since'] = changes_since
+        filters['marker'] = i1['uuid']
+        result = db.instance_get_all_by_filters(self.ctxt,
+                                                filters)
         self._assertEqualListsOfInstances([i2], result)
 
     def test_instance_get_all_by_filters_exact_match(self):
@@ -6111,7 +6132,7 @@ class NetworkTestCase(test.TestCase, ModelsObjectComparatorMixin):
         self.assertEqual('192.0.2.1', data[0]['address'])
         self.assertEqual('192.0.2.1', data[0]['vif_address'])
         self.assertEqual(instance.uuid, data[0]['instance_uuid'])
-        self.assertTrue(data[0]['allocated'])
+        self.assertTrue(data[0][fields.PciDeviceStatus.ALLOCATED])
 
     def test_network_create_safe(self):
         values = {'host': 'localhost', 'project_id': 'project1'}
@@ -8469,11 +8490,11 @@ class PciDeviceDBApiTestCase(test.TestCase, ModelsObjectComparatorMixin):
                 'vendor_id': '8086',
                 'product_id': '1520',
                 'numa_node': 1,
-                'dev_type': 'type-VF',
+                'dev_type': fields.PciDeviceType.SRIOV_VF,
                 'dev_id': 'pci_0000:0f:08.7',
                 'extra_info': None,
                 'label': 'label_8086_1520',
-                'status': 'available',
+                'status': fields.PciDeviceStatus.AVAILABLE,
                 'instance_uuid': '00000000-0000-0000-0000-000000000010',
                 'request_id': None,
                 }, {'id': 3356,
@@ -8482,11 +8503,11 @@ class PciDeviceDBApiTestCase(test.TestCase, ModelsObjectComparatorMixin):
                 'vendor_id': '8083',
                 'product_id': '1523',
                 'numa_node': 0,
-                'dev_type': 'type-VF',
+                'dev_type': fields.PciDeviceType.SRIOV_VF,
                 'dev_id': 'pci_0000:0f:08.7',
                 'extra_info': None,
                 'label': 'label_8086_1520',
-                'status': 'available',
+                'status': fields.PciDeviceStatus.AVAILABLE,
                 'instance_uuid': '00000000-0000-0000-0000-000000000010',
                 'request_id': None,
                 }
@@ -8554,8 +8575,8 @@ class PciDeviceDBApiTestCase(test.TestCase, ModelsObjectComparatorMixin):
 
     def test_pci_device_get_by_instance_uuid(self):
         v1, v2 = self._create_fake_pci_devs()
-        v1['status'] = 'allocated'
-        v2['status'] = 'allocated'
+        v1['status'] = fields.PciDeviceStatus.ALLOCATED
+        v2['status'] = fields.PciDeviceStatus.ALLOCATED
         db.pci_device_update(self.admin_context, v1['compute_node_id'],
                              v1['address'], v1)
         db.pci_device_update(self.admin_context, v2['compute_node_id'],
@@ -8567,8 +8588,8 @@ class PciDeviceDBApiTestCase(test.TestCase, ModelsObjectComparatorMixin):
 
     def test_pci_device_get_by_instance_uuid_check_status(self):
         v1, v2 = self._create_fake_pci_devs()
-        v1['status'] = 'allocated'
-        v2['status'] = 'claimed'
+        v1['status'] = fields.PciDeviceStatus.ALLOCATED
+        v2['status'] = fields.PciDeviceStatus.CLAIMED
         db.pci_device_update(self.admin_context, v1['compute_node_id'],
                              v1['address'], v1)
         db.pci_device_update(self.admin_context, v2['compute_node_id'],
@@ -8580,14 +8601,14 @@ class PciDeviceDBApiTestCase(test.TestCase, ModelsObjectComparatorMixin):
 
     def test_pci_device_update(self):
         v1, v2 = self._create_fake_pci_devs()
-        v1['status'] = 'allocated'
+        v1['status'] = fields.PciDeviceStatus.ALLOCATED
         db.pci_device_update(self.admin_context, v1['compute_node_id'],
                              v1['address'], v1)
         result = db.pci_device_get_by_addr(
             self.admin_context, 1, '0000:0f:08.7')
         self._assertEqualObjects(v1, result, self.ignored_keys)
 
-        v1['status'] = 'claimed'
+        v1['status'] = fields.PciDeviceStatus.CLAIMED
         db.pci_device_update(self.admin_context, v1['compute_node_id'],
                              v1['address'], v1)
         result = db.pci_device_get_by_addr(

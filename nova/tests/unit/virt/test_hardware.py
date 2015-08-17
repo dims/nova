@@ -1560,10 +1560,10 @@ class HelperMethodsTestCase(test.NoDBTestCase):
             cells=[
                 objects.InstanceNUMACell(
                     id=0, cpuset=set([0, 1]), memory=256, pagesize=2048,
-                    cpu_pinning={1: 3, 0: 4}),
+                    cpu_pinning={0: 1, 0: 1}),
                 objects.InstanceNUMACell(
                     id=1, cpuset=set([2]), memory=256, pagesize=2048,
-                    cpu_pinning={2: 5}),
+                    cpu_pinning={2: 3}),
         ])
         self.context = context.RequestContext('fake-user',
                                               'fake-project')
@@ -1758,6 +1758,27 @@ class VirtMemoryPagesTestCase(test.NoDBTestCase):
             exception.MemoryPageSizeInvalid,
             self._test_get_requested_mempages_pagesize,
             {"hw:mem_page_size": "foo"})
+
+        self.assertRaises(
+            exception.MemoryPageSizeInvalid,
+            self._test_get_requested_mempages_pagesize,
+            {"hw:mem_page_size": "-42"})
+
+    def test_get_requested_mempages_pagesizes_from_flavor_suffix_sweep(self):
+        self.assertEqual(
+            2048,
+            self._test_get_requested_mempages_pagesize(
+                spec={"hw:mem_page_size": "2048KB"}))
+
+        self.assertEqual(
+            2048,
+            self._test_get_requested_mempages_pagesize(
+                spec={"hw:mem_page_size": "2MB"}))
+
+        self.assertEqual(
+            1048576,
+            self._test_get_requested_mempages_pagesize(
+                spec={"hw:mem_page_size": "1GB"}))
 
     def test_get_requested_mempages_pagesize_from_image_flavor_any(self):
         self.assertEqual(

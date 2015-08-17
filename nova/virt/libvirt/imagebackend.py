@@ -166,6 +166,11 @@ class Image(object):
         info.driver_name = driver_name
         info.source_path = self.path
 
+        self.disk_qos(info, extra_specs)
+
+        return info
+
+    def disk_qos(self, info, extra_specs):
         tune_items = ['disk_read_bytes_sec', 'disk_read_iops_sec',
             'disk_write_bytes_sec', 'disk_write_iops_sec',
             'disk_total_bytes_sec', 'disk_total_iops_sec']
@@ -174,7 +179,6 @@ class Image(object):
             if len(scope) > 1 and scope[0] == 'quota':
                 if scope[1] in tune_items:
                     setattr(info, scope[1], value)
-        return info
 
     def libvirt_fs_info(self, target, driver_type=None):
         """Get `LibvirtConfigGuestFilesys` filled for this image.
@@ -385,6 +389,23 @@ class Image(object):
         :returns: an instance of nova.virt.image.model.Image
         """
         raise NotImplementedError()
+
+    def import_file(self, instance, local_file, remote_name):
+        """Import an image from local storage into this backend.
+
+        Import a local file into the store used by this image type. Note that
+        this is a noop for stores using local disk (the local file is
+        considered "in the store").
+
+        If the image already exists it will be overridden by the new file
+
+        :param local_file: path to the file to import
+        :param remote_name: the name for the file in the store
+        """
+
+        # NOTE(mikal): this is a noop for now for all stores except RBD, but
+        # we should talk about if we want this functionality for everything.
+        pass
 
 
 class Raw(Image):
@@ -730,6 +751,9 @@ class Rbd(Image):
         if auth_enabled:
             info.auth_secret_type = 'ceph'
             info.auth_secret_uuid = CONF.libvirt.rbd_secret_uuid
+
+        self.disk_qos(info, extra_specs)
+
         return info
 
     def _can_fallocate(self):
@@ -802,6 +826,12 @@ class Rbd(Image):
                                  self.rbd_user,
                                  secret,
                                  servers)
+
+    def import_file(self, instance, local_file, remote_name):
+        name = '%s_%s' % (instance.uuid, remote_name)
+        if self.check_image_exists():
+            self.driver.remove_image(name)
+        self.driver.import_image(local_file, name)
 
 
 class Ploop(Image):

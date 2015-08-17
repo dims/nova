@@ -284,15 +284,11 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
 
     @mock.patch.object(vm_util, 'get_vm_ref', return_value='fake_ref')
     def test_get_info(self, mock_get_vm_ref):
-        props = ['summary.config.numCpu', 'summary.config.memorySizeMB',
-                 'runtime.powerState']
-        prop_cpu = vmwareapi_fake.Prop(props[0], 4)
-        prop_mem = vmwareapi_fake.Prop(props[1], 128)
-        prop_state = vmwareapi_fake.Prop(props[2], 'poweredOn')
-        prop_list = [prop_state, prop_mem, prop_cpu]
-        obj_content = vmwareapi_fake.ObjectContent(None, prop_list=prop_list)
-        result = vmwareapi_fake.FakeRetrieveResult()
-        result.add_object(obj_content)
+        result = {
+            'summary.config.numCpu': 4,
+            'summary.config.memorySizeMB': 128,
+            'runtime.powerState': 'poweredOn'
+        }
 
         def mock_call_method(module, method, *args, **kwargs):
             if method == 'continue_retrieval':
@@ -312,14 +308,9 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
 
     @mock.patch.object(vm_util, 'get_vm_ref', return_value='fake_ref')
     def test_get_info_when_ds_unavailable(self, mock_get_vm_ref):
-        props = ['summary.config.numCpu', 'summary.config.memorySizeMB',
-                 'runtime.powerState']
-        prop_state = vmwareapi_fake.Prop(props[2], 'poweredOff')
-        # when vm's ds not available, only power state can be received
-        prop_list = [prop_state]
-        obj_content = vmwareapi_fake.ObjectContent(None, prop_list=prop_list)
-        result = vmwareapi_fake.FakeRetrieveResult()
-        result.add_object(obj_content)
+        result = {
+            'runtime.powerState': 'poweredOff'
+        }
 
         def mock_call_method(module, method, *args, **kwargs):
             if method == 'continue_retrieval':
@@ -394,7 +385,6 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
     @mock.patch.object(vm_util, 'power_off_instance')
     @mock.patch.object(ds_util, 'disk_copy')
     @mock.patch.object(vm_util, 'get_vm_ref', return_value='fake-ref')
-    @mock.patch.object(vm_util, 'get_values_from_object_properties')
     @mock.patch.object(vm_util, 'find_rescue_device')
     @mock.patch.object(vm_util, 'get_vm_boot_spec')
     @mock.patch.object(vm_util, 'reconfigure_vm')
@@ -402,7 +392,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
     @mock.patch.object(ds_obj, 'get_datastore_by_ref')
     def test_rescue(self, mock_get_ds_by_ref, mock_power_on, mock_reconfigure,
                     mock_get_boot_spec, mock_find_rescue,
-                    mock_get_values, mock_get_vm_ref, mock_disk_copy,
+                    mock_get_vm_ref, mock_disk_copy,
                     mock_power_off):
         _volumeops = mock.Mock()
         self._vmops._volumeops = _volumeops
@@ -1966,11 +1956,71 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
         self._test_fetch_image_if_missing(
                 is_iso=True)
 
+    def test_get_esx_host_and_cookies(self):
+        datastore = mock.Mock()
+        datastore.get_connected_hosts.return_value = ['fira-host']
+        file_path = mock.Mock()
+
+        def fake_invoke(module, method, *args, **kwargs):
+            if method == 'AcquireGenericServiceTicket':
+                ticket = mock.Mock()
+                ticket.id = 'fira-ticket'
+                return ticket
+            elif method == 'get_object_property':
+                return 'fira-host'
+        with contextlib.nested(
+            mock.patch.object(self._session, 'invoke_api', fake_invoke),
+        ):
+            result = self._vmops._get_esx_host_and_cookies(datastore,
+                                                           'ha-datacenter',
+                                                           file_path)
+            self.assertEqual('fira-host', result[0])
+            cookies = result[1]
+            self.assertEqual(1, len(cookies))
+            self.assertEqual('vmware_cgi_ticket', cookies[0].name)
+            self.assertEqual('"fira-ticket"', cookies[0].value)
+
     @mock.patch.object(images, 'fetch_image')
-    def test_fetch_image_as_file(self, mock_fetch_image):
+    @mock.patch.object(vmops.VMwareVMOps, '_get_esx_host_and_cookies')
+    def test_fetch_image_as_file(self,
+                        mock_get_esx_host_and_cookies,
+                        mock_fetch_image):
         vi = self._make_vm_config_info()
         image_ds_loc = mock.Mock()
+        host = mock.Mock()
+        dc_name = 'ha-datacenter'
+        cookies = mock.Mock()
+        mock_get_esx_host_and_cookies.return_value = host, cookies
         self._vmops._fetch_image_as_file(self._context, vi, image_ds_loc)
+        mock_get_esx_host_and_cookies.assert_called_once_with(
+                vi.datastore,
+                dc_name,
+                image_ds_loc.rel_path)
+        mock_fetch_image.assert_called_once_with(
+                self._context,
+                vi.instance,
+                host,
+                self._session._port,
+                dc_name,
+                self._ds.name,
+                image_ds_loc.rel_path,
+                cookies=cookies)
+
+    @mock.patch.object(images, 'fetch_image')
+    @mock.patch.object(vmops.VMwareVMOps, '_get_esx_host_and_cookies')
+    def test_fetch_image_as_file_exception(self,
+                                 mock_get_esx_host_and_cookies,
+                                 mock_fetch_image):
+        vi = self._make_vm_config_info()
+        image_ds_loc = mock.Mock()
+        dc_name = 'ha-datacenter'
+        mock_get_esx_host_and_cookies.side_effect = \
+            exception.HostNotFound(host='')
+        self._vmops._fetch_image_as_file(self._context, vi, image_ds_loc)
+        mock_get_esx_host_and_cookies.assert_called_once_with(
+                vi.datastore,
+                dc_name,
+                image_ds_loc.rel_path)
         mock_fetch_image.assert_called_once_with(
                 self._context,
                 vi.instance,
@@ -2102,7 +2152,9 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
     @mock.patch.object(ds_util, 'file_move')
     @mock.patch.object(vm_util, 'copy_virtual_disk')
     @mock.patch.object(vmops.VMwareVMOps, '_delete_datastore_file')
+    @mock.patch.object(vmops.VMwareVMOps, '_update_image_size')
     def test_cache_sparse_image(self,
+                                mock_update_image_size,
                                 mock_delete_datastore_file,
                                 mock_copy_virtual_disk,
                                 mock_file_move):
@@ -2121,6 +2173,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
                 self._session, self._dc_info.ref,
                 sparse_disk_path,
                 DsPathMatcher(target_disk_path))
+        mock_update_image_size.assert_called_once_with(vi)
 
     def test_get_storage_policy_none(self):
         flavor = objects.Flavor(name='m1.small',
@@ -2168,7 +2221,7 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
 
     def _test_reboot_vm(self, reboot_type="SOFT"):
 
-        expected_methods = ['get_object_properties']
+        expected_methods = ['get_object_properties_dict']
         if reboot_type == "SOFT":
             expected_methods.append('RebootGuest')
         else:
@@ -2182,28 +2235,21 @@ class VMwareVMOpsTestCase(test.NoDBTestCase):
         def fake_call_method(module, method, *args, **kwargs):
             expected_method = expected_methods.pop(0)
             self.assertEqual(expected_method, method)
-            if (expected_method == 'get_object_properties'):
-                return 'fake-props'
+            if (expected_method == 'get_object_properties_dict'):
+                return query
             elif (expected_method == 'ResetVM_Task'):
                 return 'fake-task'
 
         with contextlib.nested(
                 mock.patch.object(vm_util, "get_vm_ref",
                                   return_value='fake-vm-ref'),
-                mock.patch.object(vm_util, "get_values_from_object_properties",
-                                  return_value=query),
                 mock.patch.object(self._session, "_call_method",
                                   fake_call_method),
                 mock.patch.object(self._session, "_wait_for_task")
-        ) as (_get_vm_ref, _get_values_from_object_properties,
-              fake_call_method, _wait_for_task):
+        ) as (_get_vm_ref, fake_call_method, _wait_for_task):
             self._vmops.reboot(self._instance, self.network_info, reboot_type)
             _get_vm_ref.assert_called_once_with(self._session,
                                                 self._instance)
-
-            _get_values_from_object_properties.assert_called_once_with(
-                                                              self._session,
-                                                              'fake-props')
             if reboot_type == "HARD":
                 _wait_for_task.assert_has_calls([
                        mock.call('fake-task')])

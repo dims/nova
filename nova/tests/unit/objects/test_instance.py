@@ -29,6 +29,7 @@ from nova.network import model as network_model
 from nova import notifications
 from nova import objects
 from nova.objects import base
+from nova.objects import fields
 from nova.objects import instance
 from nova.objects import instance_info_cache
 from nova.objects import pci_device
@@ -740,8 +741,8 @@ class _TestInstanceObject(object):
              'vendor_id': 'v1',
              'numa_node': 0,
              'product_id': 'p1',
-             'dev_type': 't',
-             'status': 'allocated',
+             'dev_type': fields.PciDeviceType.STANDARD,
+             'status': fields.PciDeviceStatus.ALLOCATED,
              'dev_id': 'i',
              'label': 'l',
              'instance_uuid': fake_uuid,
@@ -758,8 +759,8 @@ class _TestInstanceObject(object):
              'vendor_id': 'v',
              'numa_node': 1,
              'product_id': 'p',
-             'dev_type': 't',
-             'status': 'allocated',
+             'dev_type': fields.PciDeviceType.STANDARD,
+             'status': fields.PciDeviceStatus.ALLOCATED,
              'dev_id': 'i',
              'label': 'l',
              'instance_uuid': fake_uuid,

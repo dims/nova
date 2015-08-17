@@ -189,6 +189,10 @@ class PolicyNotAuthorized(Forbidden):
     msg_fmt = _("Policy doesn't allow %(action)s to be performed.")
 
 
+class VolumeLimitExceeded(Forbidden):
+    msg_fmt = _("Volume resource quota exceeded")
+
+
 class ImageNotActive(NovaException):
     # NOTE(jruzicka): IncorrectState is used for volumes only in EC2,
     # but it still seems like the most appropriate option.
@@ -277,6 +281,11 @@ class VolumeNotCreated(NovaException):
     msg_fmt = _("Volume %(volume_id)s did not finish being created"
                 " even after we waited %(seconds)s seconds or %(attempts)s"
                 " attempts. And its status is %(volume_status)s.")
+
+
+class VolumeEncryptionNotSupported(Invalid):
+    msg_fmt = _("Volume encryption is not supported for %(volume_type)s "
+                "volume %(volume_id)s")
 
 
 class InvalidKeypair(Invalid):
@@ -1843,6 +1852,11 @@ class CPUPinningNotSupported(Invalid):
 class CPUPinningInvalid(Invalid):
     msg_fmt = _("Cannot pin/unpin cpus %(requested)s from the following "
                 "pinned set %(pinned)s")
+
+
+class CPUPinningUnknown(Invalid):
+    msg_fmt = _("CPU set to pin/unpin %(requested)s must be a subset of "
+                "known CPU set %(cpuset)s")
 
 
 class ImageCPUPinningForbidden(Forbidden):

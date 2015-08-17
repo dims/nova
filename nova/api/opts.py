@@ -21,12 +21,12 @@ import nova.api.metadata.vendordata_json
 import nova.api.openstack
 import nova.api.openstack.common
 import nova.api.openstack.compute
-import nova.api.openstack.compute.contrib
-import nova.api.openstack.compute.contrib.fping
-import nova.api.openstack.compute.contrib.os_tenant_networks
-import nova.api.openstack.compute.extensions
-import nova.api.openstack.compute.plugins.v3.hide_server_addresses
-import nova.api.openstack.compute.servers
+import nova.api.openstack.compute.hide_server_addresses
+import nova.api.openstack.compute.legacy_v2.contrib
+import nova.api.openstack.compute.legacy_v2.contrib.fping
+import nova.api.openstack.compute.legacy_v2.contrib.os_tenant_networks
+import nova.api.openstack.compute.legacy_v2.extensions
+import nova.api.openstack.compute.legacy_v2.servers
 import nova.availability_zones
 import nova.baserpc
 import nova.cells.manager
@@ -134,13 +134,13 @@ def list_opts():
              nova.api.metadata.base.metadata_opts,
              nova.api.metadata.handler.metadata_opts,
              nova.api.openstack.common.osapi_opts,
-             nova.api.openstack.compute.contrib.ext_opts,
-             nova.api.openstack.compute.contrib.fping.fping_opts,
-             nova.api.openstack.compute.contrib.os_tenant_networks.
+             nova.api.openstack.compute.legacy_v2.contrib.ext_opts,
+             nova.api.openstack.compute.legacy_v2.contrib.fping.fping_opts,
+             nova.api.openstack.compute.legacy_v2.contrib.os_tenant_networks.
                  os_network_opts,
-             nova.api.openstack.compute.extensions.ext_opts,
-             nova.api.openstack.compute.plugins.v3.hide_server_addresses.opts,
-             nova.api.openstack.compute.servers.server_opts,
+             nova.api.openstack.compute.legacy_v2.extensions.ext_opts,
+             nova.api.openstack.compute.hide_server_addresses.opts,
+             nova.api.openstack.compute.legacy_v2.servers.server_opts,
          )),
         ('neutron', nova.api.metadata.handler.metadata_proxy_opts),
         ('osapi_v3', nova.api.openstack.api_opts),

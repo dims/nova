@@ -15,8 +15,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version:  nova\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2015-08-05 06:20+0000\n"
-"PO-Revision-Date: 2015-08-05 00:46+0000\n"
+"POT-Creation-Date: 2015-08-12 06:30+0000\n"
+"PO-Revision-Date: 2015-08-12 06:27+0000\n"
 "Last-Translator: openstackjenkins <jenkins@openstack.org>\n"
 "Language-Team: Spanish (http://www.transifex.com/openstack/nova/language/"
 "es/)\n"
@@ -2622,10 +2622,6 @@ msgstr ""
 "Lista de los sistemas de archivo que estan configurados en este archivo en "
 "la image_file_url: secciones <list entry name>"
 
-msgid "Live migration can not be used without shared storage."
-msgstr ""
-"No se puede utilizar la migración en directo con almacenamiento compartido."
-
 #, python-format
 msgid "Live migration failed: %s"
 msgstr "Ha fallado la migración en directo: %s"
@@ -3251,9 +3247,6 @@ msgstr ""
 msgid "Only 'updated_since', 'project_id' and 'deleted' are understood."
 msgstr "Solamente 'updated_since', 'project_id' y 'deleted' son entendidos."
 
-msgid "Only KVM and QEMU are supported"
-msgstr "Solo se soporta KVM y QEMU"
-
 msgid "Only administrators may list deleted instances"
 msgstr "Sólo los administradores pueden listar instancias suprimidas "
 
@@ -3442,15 +3435,6 @@ msgstr "La acción watchdog proporcionada (%(action)s) no está soportada."
 
 msgid "QEMU guest agent is not enabled"
 msgstr "Agente invitado QEMU no está habilitado"
-
-#, python-format
-msgid "Quiescing is not supported in instance %(instance_id)s: %(reason)s"
-msgstr ""
-"El modo inactivo no es soportado en instancia %(instance_id)s: %(reason)s"
-
-#, python-format
-msgid "Quiescing requires libvirt version %(version)s or greater"
-msgstr "El modo inactivo requiere versión libvirt %(version)s o mayor"
 
 msgid "Quota"
 msgstr "Cuota"
@@ -4602,14 +4586,6 @@ msgstr ""
 "%s"
 
 #, python-format
-msgid ""
-"Unexpected VM state: expecting %(expected)s but the actual state is "
-"%(actual)s"
-msgstr ""
-"Estado de VM inesperado: se esperaba %(expected)s pero el estado actual es "
-"%(actual)s"
-
-#, python-format
 msgid "Unexpected aggregate action %s"
 msgstr "Acción de agregado inesperada %s"
 
@@ -4620,14 +4596,6 @@ msgid ""
 msgstr ""
 "Configuración sysinfo_serial inesperada '%(actual)s'. Los valores permitidos "
 "son %(expect)s'"
-
-#, python-format
-msgid ""
-"Unexpected task state: expecting %(expected)s but the actual state is "
-"%(actual)s"
-msgstr ""
-"Estado de tarea inesperado: se esperaba %(expected)s pero el estado es "
-"%(actual)s"
 
 msgid "Unexpected type adding stats"
 msgstr "Estado de adición de tipo inesperada"
@@ -5217,9 +5185,6 @@ msgstr "Se necesita imageLocation"
 
 msgid "index"
 msgstr "índice"
-
-msgid "installed version of librbd does not support cloning"
-msgstr "La versión de librbd instalada no soporta clonación"
 
 msgid "instance"
 msgstr "instancia"

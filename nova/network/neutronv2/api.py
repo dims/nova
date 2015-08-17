@@ -301,7 +301,7 @@ class API(base_api.NetworkAPI):
                             'for network %(network_id)s.'),
                         {'ip': fixed_ip, 'network_id': network_id})
             msg = (_('Fixed IP %(ip)s is not a valid ip address for '
-                    'network %(network_id)s.'),
+                     'network %(network_id)s.') %
                    {'ip': fixed_ip, 'network_id': network_id})
             raise exception.InvalidInput(reason=msg)
         except neutron_client_exc.IpAddressInUseClient:
@@ -358,6 +358,10 @@ class API(base_api.NetworkAPI):
             port_client = (neutron if not port_binding else
                            get_client(context, admin=True))
         for port_id in ports:
+            # A port_id is optional in the NetworkRequest object so check here
+            # in case the caller forgot to filter the list.
+            if port_id is None:
+                continue
             port_req_body = {'port': {'device_id': '', 'device_owner': ''}}
             if port_binding:
                 port_req_body['port']['binding:host_id'] = None
@@ -852,7 +856,7 @@ class API(base_api.NetworkAPI):
         except neutron_client_exc.Unauthorized:
             raise exception.Forbidden()
         except neutron_client_exc.NeutronClientException as exc:
-            msg = (_("Failed to access port %(port_id)s: %(reason)s"),
+            msg = (_("Failed to access port %(port_id)s: %(reason)s") %
                    {'port_id': port_id, 'reason': exc})
             raise exception.NovaException(message=msg)
 
@@ -1126,10 +1130,10 @@ class API(base_api.NetworkAPI):
             else:
                 free_ports = quotas.get('port') - len(ports)
                 if free_ports < 0:
-                    msg = (_("The number of defined ports: %(ports)d"
-                                      "is over the limit: %(quota)d"),
-                                      {'ports': len(ports),
-                                       'quota': quotas.get('port')})
+                    msg = (_("The number of defined ports: %(ports)d "
+                             "is over the limit: %(quota)d") %
+                           {'ports': len(ports),
+                            'quota': quotas.get('port')})
                     raise exception.PortLimitExceeded(msg)
                 ports_needed = ports_needed_per_instance * num_instances
                 if free_ports >= ports_needed:
