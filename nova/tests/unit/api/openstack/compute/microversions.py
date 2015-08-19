@@ -19,7 +19,7 @@ import webob
 from nova.api.openstack import extensions
 from nova.api.openstack import wsgi
 from nova.api import validation
-from nova.tests.unit.api.openstack.compute.test_plugins import dummy_schema
+from nova.tests.unit.api.openstack.compute import dummy_schema
 
 ALIAS = 'test-microversions'
 
@@ -124,7 +124,7 @@ class MicroversionsExtendsController3(wsgi.Controller):
         resp_obj.obj['extend_ctrlr3'] = 'val_3'
 
 
-class Microversions(extensions.V3APIExtensionBase):
+class Microversions(extensions.V21APIExtensionBase):
     """Basic Microversions Extension."""
 
     name = "Microversions"
