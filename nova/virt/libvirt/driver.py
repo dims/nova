@@ -1037,7 +1037,7 @@ class LibvirtDriver(driver.ComputeDriver):
         return []
 
     def get_volume_connector(self, instance):
-        root_helper = utils._get_root_helper()
+        root_helper = utils.get_root_helper()
         return connector.get_connector_properties(
             root_helper, CONF.my_block_storage_ip,
             CONF.libvirt.iscsi_use_multipath,
@@ -2177,13 +2177,13 @@ class LibvirtDriver(driver.ComputeDriver):
                                   block_device_info=block_device_info,
                                   write_to_disk=True)
 
-        # NOTE (rmk): Re-populate any missing backing files.
-        disk_info = self._get_instance_disk_info(instance.name, xml,
-                                                 block_device_info)
-
         if context.auth_token is not None:
+            # NOTE (rmk): Re-populate any missing backing files.
+            backing_disk_info = self._get_instance_disk_info(instance.name,
+                                                             xml,
+                                                             block_device_info)
             self._create_images_and_backing(context, instance, instance_dir,
-                                            disk_info)
+                                            backing_disk_info)
 
         # Initialize all the necessary networking, block devices and
         # start the instance.
@@ -4435,10 +4435,10 @@ class LibvirtDriver(driver.ComputeDriver):
 
         if self._is_booted_from_volume(instance, disk_mapping):
             root_disk = block_device.get_root_bdm(block_device_mapping)
-            disk_path = root_disk['connection_info']['data']['device_path']
             disk_info = blockinfo.get_info_from_bdm(
                 instance, CONF.libvirt.virt_type, image_meta, root_disk)
             self._connect_volume(root_disk['connection_info'], disk_info)
+            disk_path = root_disk['connection_info']['data']['device_path']
 
             # Get the system metadata from the instance
             use_cow = instance.system_metadata['image_disk_format'] == 'qcow2'

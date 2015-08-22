@@ -7717,7 +7717,6 @@ class LibvirtConnTestCase(test.NoDBTestCase):
                       'serial': 'afc1',
                       'data': {
                           'access_mode': 'rw',
-                          'device_path': '/dev/path/to/dev',
                           'target_discovered': False,
                           'encrypted': False,
                           'qos_specs': None,
@@ -7734,6 +7733,9 @@ class LibvirtConnTestCase(test.NoDBTestCase):
                   'device_type': 'disk',
                   'delete_on_termination': False
               }
+
+        def _connect_volume_side_effect(connection_info, disk_info):
+            bdm['connection_info']['data']['device_path'] = '/dev/path/to/dev'
 
         def _get(key, opt=None):
             return bdm.get(key, opt)
@@ -7773,7 +7775,8 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             mock.patch.object(drvr.firewall_driver, 'prepare_instance_filter'),
             mock.patch.object(drvr.firewall_driver, 'apply_instance_filter'),
             mock.patch.object(drvr, '_create_domain'),
-            mock.patch.object(drvr, '_connect_volume'),
+            mock.patch.object(drvr, '_connect_volume',
+                              side_effect=_connect_volume_side_effect),
             mock.patch.object(drvr, '_get_volume_config',
                                      return_value=disk_mock),
             mock.patch.object(drvr, 'get_info',
@@ -8657,12 +8660,15 @@ class LibvirtConnTestCase(test.NoDBTestCase):
     @mock.patch('nova.virt.libvirt.LibvirtDriver._create_images_and_backing')
     @mock.patch('nova.virt.libvirt.LibvirtDriver._get_guest_xml')
     @mock.patch('nova.virt.libvirt.LibvirtDriver._get_instance_disk_info')
+    @mock.patch('nova.virt.libvirt.blockinfo.get_disk_info')
     @mock.patch('nova.virt.libvirt.LibvirtDriver._destroy')
-    def test_hard_reboot(self, mock_destroy, mock_get_instance_disk_info,
-                         mock_get_guest_xml, mock_create_images_and_backing,
+    def test_hard_reboot(self, mock_destroy, mock_get_disk_info,
+                         mock_get_instance_disk_info, mock_get_guest_xml,
+                         mock_create_images_and_backing,
                          mock_create_domain_and_network, mock_get_info):
         self.context.auth_token = True  # any non-None value will suffice
         instance = objects.Instance(**self.test_instance)
+        instance_path = libvirt_utils.get_instance_path(instance)
         network_info = _fake_network_info(self.stubs, 1)
         block_device_info = None
 
@@ -8682,13 +8688,28 @@ class LibvirtConnTestCase(test.NoDBTestCase):
                          hardware.InstanceInfo(state=power_state.RUNNING)]
         mock_get_info.side_effect = return_values
 
-        disk_info = [{"virt_disk_size": 2}]
+        backing_disk_info = [{"virt_disk_size": 2}]
 
+        mock_get_disk_info.return_value = mock.sentinel.disk_info
         mock_get_guest_xml.return_value = dummyxml
-        mock_get_instance_disk_info.return_value = disk_info
+        mock_get_instance_disk_info.return_value = backing_disk_info
 
         drvr._hard_reboot(self.context, instance, network_info,
                           block_device_info)
+
+        # make sure that _create_images_and_backing is passed the disk_info
+        # returned from _get_instance_disk_info and not the one that is in
+        # scope from blockinfo.get_disk_info
+        mock_create_images_and_backing.assert_called_once_with(self.context,
+            instance, instance_path, backing_disk_info)
+
+        # make sure that _create_domain_and_network is passed the disk_info
+        # returned from blockinfo.get_disk_info and not the one that's
+        # returned from _get_instance_disk_info
+        mock_create_domain_and_network.assert_called_once_with(self.context,
+            dummyxml, instance, network_info, mock.sentinel.disk_info,
+            block_device_info=block_device_info,
+            reboot=True, vifs_already_plugged=True)
 
     @mock.patch('oslo_utils.fileutils.ensure_tree')
     @mock.patch('oslo_service.loopingcall.FixedIntervalLoopingCall')

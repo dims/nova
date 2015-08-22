@@ -1728,13 +1728,13 @@ class API(base.Base):
         #    shy by delta(old, new) from the quota usages accounted
         #    for this instance, so we must adjust
         try:
-            deltas = self._downsize_quota_delta(context, instance)
+            deltas = compute_utils.downsize_quota_delta(context, instance)
         except KeyError:
             LOG.info(_LI('Migration %s may have been confirmed during '
                          'delete'),
                      migration.id, context=context, instance=instance)
             return
-        quotas = self._reserve_quota_delta(context, deltas, instance)
+        quotas = compute_utils.reserve_quota_delta(context, deltas, instance)
 
         self._record_action_start(context, instance,
                                   instance_actions.CONFIRM_RESIZE)
@@ -1762,19 +1762,9 @@ class API(base.Base):
             if (migration and
                     instance.instance_type_id ==
                         migration.new_instance_type_id):
-                old_inst_type_id = migration.old_instance_type_id
-                try:
-                    old_inst_type = flavors.get_flavor(old_inst_type_id)
-                except exception.FlavorNotFound:
-                    LOG.warning(_LW("Flavor %d not found"), old_inst_type_id)
-                    pass
-                else:
-                    instance_vcpus = old_inst_type['vcpus']
-                    vram_mb = int(old_inst_type.get('extra_specs',
-                                                    {}).get(VIDEO_RAM, 0))
-                    instance_memory_mb = (old_inst_type['memory_mb'] + vram_mb)
-                    LOG.debug("going to delete a resizing instance",
-                              instance=instance)
+                get_inst_attrs = compute_utils.get_inst_attrs_from_migration
+                instance_vcpus, instance_memory_mb = get_inst_attrs(migration,
+                                                                    instance)
 
         quotas = objects.Quotas(context)
         quotas.reserve(project_id=project_id,
@@ -2515,8 +2505,8 @@ class API(base.Base):
             elevated, instance.uuid, 'finished')
 
         # reverse quota reservation for increased resource usage
-        deltas = self._reverse_upsize_quota_delta(context, migration)
-        quotas = self._reserve_quota_delta(context, deltas, instance)
+        deltas = compute_utils.reverse_upsize_quota_delta(context, migration)
+        quotas = compute_utils.reserve_quota_delta(context, deltas, instance)
 
         instance.task_state = task_states.RESIZE_REVERTING
         try:
@@ -2552,8 +2542,8 @@ class API(base.Base):
                 elevated, instance.uuid, 'finished')
 
         # reserve quota only for any decrease in resource usage
-        deltas = self._downsize_quota_delta(context, instance)
-        quotas = self._reserve_quota_delta(context, deltas, instance)
+        deltas = compute_utils.downsize_quota_delta(context, instance)
+        quotas = compute_utils.reserve_quota_delta(context, deltas, instance)
 
         migration.status = 'confirming'
         migration.save()
@@ -2570,78 +2560,6 @@ class API(base.Base):
                                            migration,
                                            migration.source_compute,
                                            quotas.reservations or [])
-
-    @staticmethod
-    def _resize_quota_delta(context, new_flavor,
-                            old_flavor, sense, compare):
-        """Calculate any quota adjustment required at a particular point
-        in the resize cycle.
-
-        :param context: the request context
-        :param new_flavor: the target instance type
-        :param old_flavor: the original instance type
-        :param sense: the sense of the adjustment, 1 indicates a
-                      forward adjustment, whereas -1 indicates a
-                      reversal of a prior adjustment
-        :param compare: the direction of the comparison, 1 indicates
-                        we're checking for positive deltas, whereas
-                        -1 indicates negative deltas
-        """
-        def _quota_delta(resource):
-            return sense * (new_flavor[resource] - old_flavor[resource])
-
-        deltas = {}
-        if compare * _quota_delta('vcpus') > 0:
-            deltas['cores'] = _quota_delta('vcpus')
-        if compare * _quota_delta('memory_mb') > 0:
-            deltas['ram'] = _quota_delta('memory_mb')
-
-        return deltas
-
-    @staticmethod
-    def _upsize_quota_delta(context, new_flavor, old_flavor):
-        """Calculate deltas required to adjust quota for an instance upsize.
-        """
-        return API._resize_quota_delta(context, new_flavor, old_flavor, 1, 1)
-
-    @staticmethod
-    def _reverse_upsize_quota_delta(context, migration_ref):
-        """Calculate deltas required to reverse a prior upsizing
-        quota adjustment.
-        """
-        old_flavor = objects.Flavor.get_by_id(
-            context, migration_ref['old_instance_type_id'])
-        new_flavor = objects.Flavor.get_by_id(
-            context, migration_ref['new_instance_type_id'])
-
-        return API._resize_quota_delta(context, new_flavor, old_flavor, -1, -1)
-
-    @staticmethod
-    def _downsize_quota_delta(context, instance):
-        """Calculate deltas required to adjust quota for an instance downsize.
-        """
-        old_flavor = instance.get_flavor('old')
-        new_flavor = instance.get_flavor('new')
-        return API._resize_quota_delta(context, new_flavor, old_flavor, 1, -1)
-
-    @staticmethod
-    def _reserve_quota_delta(context, deltas, instance):
-        """If there are deltas to reserve, construct a Quotas object and
-        reserve the deltas for the given project.
-
-        @param context:    The nova request context.
-        @param deltas:     A dictionary of the proposed delta changes.
-        @param instance:   The instance we're operating on, so that
-                           quotas can use the correct project_id/user_id.
-        @return: nova.objects.quotas.Quotas
-        """
-        quotas = objects.Quotas(context=context)
-        if deltas:
-            project_id, user_id = quotas_obj.ids_from_instance(context,
-                                                               instance)
-            quotas.reserve(project_id=project_id, user_id=user_id,
-                           **deltas)
-        return quotas
 
     @staticmethod
     def _resize_cells_support(context, quotas, instance,
@@ -2720,10 +2638,12 @@ class API(base.Base):
 
         # ensure there is sufficient headroom for upsizes
         if flavor_id:
-            deltas = self._upsize_quota_delta(context, new_instance_type,
-                                              current_instance_type)
+            deltas = compute_utils.upsize_quota_delta(context,
+                                                      new_instance_type,
+                                                      current_instance_type)
             try:
-                quotas = self._reserve_quota_delta(context, deltas, instance)
+                quotas = compute_utils.reserve_quota_delta(context, deltas,
+                                                           instance)
             except exception.OverQuota as exc:
                 quotas = exc.kwargs['quotas']
                 overs = exc.kwargs['overs']
@@ -4252,13 +4172,16 @@ class SecurityGroupAPI(base.Base, security_group_base.SecurityGroupBase):
             msg = _("Security group id should be integer")
             self.raise_invalid_property(msg)
 
-    def trigger_rules_refresh(self, context, id):
-        """Called when a rule is added to or removed from a security_group."""
-        instances = objects.InstanceList.get_by_security_group_id(context, id)
+    def _refresh_instance_security_rules(self, context, instances):
         for instance in instances:
             if instance.host is not None:
                 self.compute_rpcapi.refresh_instance_security_rules(
                         context, instance.host, instance)
+
+    def trigger_rules_refresh(self, context, id):
+        """Called when a rule is added to or removed from a security_group."""
+        instances = objects.InstanceList.get_by_security_group_id(context, id)
+        self._refresh_instance_security_rules(context, instances)
 
     def trigger_members_refresh(self, context, group_ids):
         """Called when a security group gains a new or loses a member.
@@ -4266,29 +4189,9 @@ class SecurityGroupAPI(base.Base, security_group_base.SecurityGroupBase):
         Sends an update request to each compute node for each instance for
         which this is relevant.
         """
-        # First, we get the security group rules that reference these groups as
-        # the grantee..
-        security_group_rules = set()
-        for group_id in group_ids:
-            security_group_rules.update(
-                self.db.security_group_rule_get_by_security_group_grantee(
-                                                                     context,
-                                                                     group_id))
-
-        # ..then we distill the rules into the groups to which they belong..
-        instances = {}
-        for rule in security_group_rules:
-            sg_instances = objects.InstanceList.get_by_security_group_id(
-                    context, rule['parent_group_id'])
-            for instance in sg_instances:
-                if instance.uuid not in instances:
-                    instances[instance.uuid] = instance
-
-        # ..then we send a request to refresh the rules for each instance.
-        for instance in instances.values():
-            if instance.host:
-                self.compute_rpcapi.refresh_instance_security_rules(
-                        context, instance.host, instance)
+        instances = objects.InstanceList.get_by_grantee_security_group_ids(
+            context, group_ids)
+        self._refresh_instance_security_rules(context, instances)
 
     def get_instance_security_groups(self, context, instance_uuid,
                                      detailed=False):
