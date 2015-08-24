@@ -30,11 +30,9 @@ from nova import test
 from nova.tests.functional.api_sample_tests.legacy_v2 import \
     api_samples_test_base
 from nova.tests.functional import integrated_helpers
-from nova.tests.unit.api.openstack import fakes
 from nova.tests.unit import fake_network
 from nova.tests.unit import fake_utils
 from nova.tests.unit.image import fake
-from nova.volume import cinder
 
 CONF = cfg.CONF
 CONF.import_opt('allow_resize_to_same_host', 'nova.compute.api')
@@ -167,37 +165,6 @@ class ServersSampleBase(ApiSampleTestBaseV2):
             self.__class__._use_common_server_api_samples = orig_value
 
 
-class ServersSampleMultiStatusJsonTest(ServersSampleBase):
-    extension_name = '.'.join(('nova.api.openstack.compute.legacy_v2.contrib',
-                               'server_list_multi_status',
-                               'Server_list_multi_status'))
-
-    def test_servers_list(self):
-        uuid = self._post_server()
-        response = self._do_get('servers?status=active&status=error')
-        subs = self._get_regexes()
-        subs['id'] = uuid
-        self._verify_response('servers-list-resp', subs, response, 200)
-
-
-class FlavorsSampleJsonTest(ApiSampleTestBaseV2):
-    sample_dir = 'flavors'
-
-    def test_flavors_get(self):
-        response = self._do_get('flavors/1')
-        subs = self._get_regexes()
-        self._verify_response('flavor-get-resp', subs, response, 200)
-
-    def test_flavors_list(self):
-        response = self._do_get('flavors')
-        subs = self._get_regexes()
-        self._verify_response('flavors-list-resp', subs, response, 200)
-
-
-class FlavorsSampleAllExtensionJsonTest(FlavorsSampleJsonTest):
-    all_extensions = True
-
-
 class LimitsSampleJsonTest(ApiSampleTestBaseV2):
     sample_dir = 'limits'
 
@@ -205,21 +172,6 @@ class LimitsSampleJsonTest(ApiSampleTestBaseV2):
         response = self._do_get('limits')
         subs = self._get_regexes()
         self._verify_response('limit-get-resp', subs, response, 200)
-
-
-class VirtualInterfacesJsonTest(ServersSampleBase):
-    extension_name = ("nova.api.openstack.compute.legacy_v2.contrib"
-                     ".virtual_interfaces.Virtual_interfaces")
-
-    def test_vifs_list(self):
-        uuid = self._post_server()
-
-        response = self._do_get('servers/%s/os-virtual-interfaces' % uuid)
-
-        subs = self._get_regexes()
-        subs['mac_addr'] = '(?:[a-f0-9]{2}:){5}[a-f0-9]{2}'
-
-        self._verify_response('vifs-list-resp', subs, response, 200)
 
 
 class UsedLimitsSamplesJsonTest(ApiSampleTestBaseV2):
@@ -295,52 +247,6 @@ class ExtendedIpsMacSampleJsonTests(ServersSampleBase):
         subs['hostid'] = '[a-f0-9]+'
         subs['mac_addr'] = '(?:[a-f0-9]{2}:){5}[a-f0-9]{2}'
         self._verify_response('servers-detail-resp', subs, response, 200)
-
-
-class ExtendedVIFNetSampleJsonTests(ServersSampleBase):
-    extension_name = ("nova.api.openstack.compute.legacy_v2.contrib"
-          ".extended_virtual_interfaces_net.Extended_virtual_interfaces_net")
-
-    def _get_flags(self):
-        f = super(ExtendedVIFNetSampleJsonTests, self)._get_flags()
-        f['osapi_compute_extension'] = CONF.osapi_compute_extension[:]
-        # extended_virtual_interfaces_net_update also
-        # needs virtual_interfaces to be loaded
-        f['osapi_compute_extension'].append(
-            ('nova.api.openstack.compute.legacy_v2.contrib'
-             '.virtual_interfaces.Virtual_interfaces'))
-        return f
-
-    def test_vifs_list(self):
-        uuid = self._post_server()
-
-        response = self._do_get('servers/%s/os-virtual-interfaces' % uuid)
-        self.assertEqual(response.status_code, 200)
-
-        subs = self._get_regexes()
-        subs['mac_addr'] = '(?:[a-f0-9]{2}:){5}[a-f0-9]{2}'
-
-        self._verify_response('vifs-list-resp', subs, response, 200)
-
-
-class BlockDeviceMappingV2BootJsonTest(ServersSampleBase):
-    extension_name = ('nova.api.openstack.compute.legacy_v2.contrib.'
-                      'block_device_mapping_v2_boot.'
-                      'Block_device_mapping_v2_boot')
-
-    def _get_flags(self):
-        f = super(BlockDeviceMappingV2BootJsonTest, self)._get_flags()
-        f['osapi_compute_extension'] = CONF.osapi_compute_extension[:]
-        # We need the volumes extension as well
-        f['osapi_compute_extension'].append(
-            'nova.api.openstack.compute.legacy_v2.contrib.volumes.Volumes')
-        return f
-
-    def test_servers_post_with_bdm_v2(self):
-        self.stubs.Set(cinder.API, 'get', fakes.stub_volume_get)
-        self.stubs.Set(cinder.API, 'check_attach',
-                       fakes.stub_volume_check_attach)
-        return self._post_server()
 
 
 class ServerGroupQuotas_LimitsSampleJsonTest(LimitsSampleJsonTest):
