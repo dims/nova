@@ -23,15 +23,11 @@ from nova.scheduler.filters import utils
 
 LOG = logging.getLogger(__name__)
 
-ram_allocation_ratio_opt = cfg.FloatOpt('ram_allocation_ratio',
-        default=1.5,
-        help='Virtual ram to physical ram allocation ratio which affects '
-             'all ram filters. This configuration specifies a global ratio '
-             'for RamFilter. For AggregateRamFilter, it will fall back to '
-             'this configuration value if no per-aggregate setting found.')
-
 CONF = cfg.CONF
-CONF.register_opt(ram_allocation_ratio_opt)
+
+# TODO(sbauza): Remove the import once all compute nodes are reporting the
+# allocation ratio to the HostState
+CONF.import_opt('ram_allocation_ratio', 'nova.compute.resource_tracker')
 
 
 class BaseRamFilter(filters.BaseHostFilter):
@@ -45,6 +41,17 @@ class BaseRamFilter(filters.BaseHostFilter):
         requested_ram = instance_type['memory_mb']
         free_ram_mb = host_state.free_ram_mb
         total_usable_ram_mb = host_state.total_usable_ram_mb
+
+        # Do not allow an instance to overcommit against itself, only against
+        # other instances.
+        if not total_usable_ram_mb >= requested_ram:
+            LOG.debug("%(host_state)s does not have %(requested_ram)s MB "
+                      "usable ram before overcommit, it only has "
+                      "%(usable_ram)s MB.",
+                      {'host_state': host_state,
+                       'requested_ram': requested_ram,
+                       'usable_ram': total_usable_ram_mb})
+            return False
 
         ram_allocation_ratio = self._get_ram_allocation_ratio(host_state,
                                                           filter_properties)

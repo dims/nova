@@ -13,13 +13,12 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+from nova.console import manager as console_manager  # noqa - only for cfg
 from nova.tests.functional.api_sample_tests import test_servers
 
 
 class ConsolesSamplesJsonTest(test_servers.ServersSampleBase):
     sample_dir = "consoles"
-    extra_extensions_to_load = ["os-access-ips"]
-    _api_version = 'v2'
 
     def setUp(self):
         super(ConsolesSamplesJsonTest, self).setUp()

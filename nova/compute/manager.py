@@ -741,6 +741,14 @@ class ComputeManager(manager.Manager):
         self._update_resource_tracker(context, instance_ref)
         return instance_ref
 
+    def _nil_out_instance_obj_host_and_node(self, instance):
+        # NOTE(jwcroppe): We don't do instance.save() here for performance
+        # reasons; a call to this is expected to be immediately followed by
+        # another call that does instance.save(), thus avoiding two writes
+        # to the database layer.
+        instance.host = None
+        instance.node = None
+
     def _set_instance_obj_error_state(self, context, instance):
         try:
             instance.vm_state = vm_states.ERROR
@@ -1456,7 +1464,7 @@ class ComputeManager(manager.Manager):
         """Attempt to re-schedule a compute operation."""
 
         instance_uuid = instance.uuid
-        retry = filter_properties.get('retry', None)
+        retry = filter_properties.get('retry')
         if not retry:
             # no retry information, do not reschedule.
             LOG.debug("Retry info not present, will not reschedule",
@@ -1893,7 +1901,7 @@ class ComputeManager(manager.Manager):
                     filter_properties)
             return build_results.ACTIVE
         except exception.RescheduledException as e:
-            retry = filter_properties.get('retry', None)
+            retry = filter_properties.get('retry')
             if not retry:
                 # no retry information, do not reschedule.
                 LOG.debug("Retry info not present, will not reschedule",
@@ -1902,6 +1910,7 @@ class ComputeManager(manager.Manager):
                     requested_networks)
                 compute_utils.add_instance_fault_from_exc(context,
                         instance, e, sys.exc_info())
+                self._nil_out_instance_obj_host_and_node(instance)
                 self._set_instance_obj_error_state(context, instance)
                 return build_results.FAILED
             LOG.debug(e.format_message(), instance=instance)
@@ -1914,11 +1923,12 @@ class ComputeManager(manager.Manager):
             else:
                 # NOTE(alex_xu): Network already allocated and we don't
                 # want to deallocate them before rescheduling. But we need
-                # cleanup those network resource setup on this host before
+                # to cleanup those network resources setup on this host before
                 # rescheduling.
                 self.network_api.cleanup_instance_network_on_host(
                     context, instance, self.host)
 
+            self._nil_out_instance_obj_host_and_node(instance)
             instance.task_state = task_states.SCHEDULING
             instance.save()
 
@@ -1942,6 +1952,7 @@ class ComputeManager(manager.Manager):
                     block_device_mapping, raise_exc=False)
             compute_utils.add_instance_fault_from_exc(context, instance,
                     e, sys.exc_info())
+            self._nil_out_instance_obj_host_and_node(instance)
             self._set_instance_obj_error_state(context, instance)
             return build_results.FAILED
         except Exception as e:
@@ -1954,6 +1965,7 @@ class ComputeManager(manager.Manager):
                     block_device_mapping, raise_exc=False)
             compute_utils.add_instance_fault_from_exc(context, instance,
                     e, sys.exc_info())
+            self._nil_out_instance_obj_host_and_node(instance)
             self._set_instance_obj_error_state(context, instance)
             return build_results.FAILED
 
@@ -2634,7 +2646,7 @@ class ComputeManager(manager.Manager):
                                  " '%s'"), str(image_ref))
 
                 # NOTE(mriedem): On a recreate (evacuate), we need to update
-                # the instance's host and node properties to reflect it's
+                # the instance's host and node properties to reflect its
                 # destination node for the recreate.
                 node_name = None
                 try:
@@ -4581,11 +4593,19 @@ class ComputeManager(manager.Manager):
                 LOG.debug("Updating volume usage cache with totals",
                           instance=instance)
                 rd_req, rd_bytes, wr_req, wr_bytes, flush_ops = vol_stats
-                self.conductor_api.vol_usage_update(context, volume_id,
-                                                    rd_req, rd_bytes,
-                                                    wr_req, wr_bytes,
-                                                    instance,
-                                                    update_totals=True)
+                vol_usage = objects.VolumeUsage(context)
+                vol_usage.volume_id = volume_id
+                vol_usage.instance_uuid = instance.uuid
+                vol_usage.project_id = instance.project_id
+                vol_usage.user_id = instance.user_id
+                vol_usage.availability_zone = instance.availability_zone
+                vol_usage.curr_reads = rd_req
+                vol_usage.curr_read_bytes = rd_bytes
+                vol_usage.curr_writes = wr_req
+                vol_usage.curr_write_bytes = wr_bytes
+                vol_usage.save(update_totals=True)
+                self.notifier.info(context, 'volume.usage',
+                                   compute_utils.usage_volume_info(vol_usage))
 
         self._driver_detach_volume(context, instance, bdm)
         connector = self.driver.get_volume_connector(instance)
@@ -4744,7 +4764,6 @@ class ComputeManager(manager.Manager):
             pass
 
     @wrap_exception()
-    @reverts_task_state
     @wrap_instance_fault
     def attach_interface(self, context, instance, network_id, port_id,
                          requested_ip):
@@ -4779,7 +4798,6 @@ class ComputeManager(manager.Manager):
         return network_info[0]
 
     @wrap_exception()
-    @reverts_task_state
     @wrap_instance_fault
     def detach_interface(self, context, instance, port_id):
         """Detach an network adapter from an instance."""
@@ -5737,12 +5755,19 @@ class ComputeManager(manager.Manager):
         for usage in vol_usages:
             # Allow switching of greenthreads between queries.
             greenthread.sleep(0)
-            self.conductor_api.vol_usage_update(context, usage['volume'],
-                                                usage['rd_req'],
-                                                usage['rd_bytes'],
-                                                usage['wr_req'],
-                                                usage['wr_bytes'],
-                                                usage['instance'])
+            vol_usage = objects.VolumeUsage(context)
+            vol_usage.volume_id = usage['volume']
+            vol_usage.instance_uuid = usage['instance'].uuid
+            vol_usage.project_id = usage['instance'].project_id
+            vol_usage.user_id = usage['instance'].user_id
+            vol_usage.availability_zone = usage['instance'].availability_zone
+            vol_usage.curr_reads = usage['rd_req']
+            vol_usage.curr_read_bytes = usage['rd_bytes']
+            vol_usage.curr_writes = usage['wr_req']
+            vol_usage.curr_write_bytes = usage['wr_bytes']
+            vol_usage.save()
+            self.notifier.info(context, 'volume.usage',
+                               compute_utils.usage_volume_info(vol_usage))
 
     @periodic_task.periodic_task(spacing=CONF.volume_usage_poll_interval)
     def _poll_volume_usage(self, context, start_time=None):

@@ -255,8 +255,7 @@ class ConductorManager(manager.Manager):
         result = self.db.instance_fault_create(context, values)
         return jsonutils.to_primitive(result)
 
-    # NOTE(kerrin): The last_refreshed argument is unused by this method
-    # and can be removed in v3.0 of the RPC API.
+    # NOTE(hanlind): This can be removed in version 3.0 of the RPC API
     def vol_usage_update(self, context, vol_id, rd_req, rd_bytes, wr_req,
                          wr_bytes, instance, last_refreshed, update_totals):
         vol_usage = self.db.vol_usage_update(context, vol_id,
@@ -269,6 +268,8 @@ class ConductorManager(manager.Manager):
                                              update_totals)
 
         # We have just updated the database, so send the notification now
+        vol_usage = objects.VolumeUsage._from_db_object(
+            context, objects.VolumeUsage(), vol_usage)
         self.notifier.info(context, 'volume.usage',
                            compute_utils.usage_volume_info(vol_usage))
 

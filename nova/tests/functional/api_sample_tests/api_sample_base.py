@@ -16,7 +16,6 @@ import os
 
 from oslo_config import cfg
 import testscenarios
-import testtools
 
 from nova.api import openstack
 from nova.api.openstack import API_V3_CORE_EXTENSIONS  # noqa
@@ -32,7 +31,7 @@ CONF = cfg.CONF
 
 class ApiSampleTestBaseV3(testscenarios.WithScenarios,
                           api_samples_test_base.ApiSampleTestBase):
-    _api_version = 'v3'
+    _api_version = 'v2'
     sample_dir = None
     extra_extensions_to_load = None
     scenarios = [('v2', {'_test': 'v2'}),
@@ -40,13 +39,6 @@ class ApiSampleTestBaseV3(testscenarios.WithScenarios,
                  ('v2_1_compatible', {'_test': 'v2.1_compatible'})]
 
     def setUp(self):
-        # TODO(gmann): Below condition is to skip the tests which running
-        # for 'v2' and have not been merged yet. Once all tests are merged
-        # this condition needs to be removed.
-        if (hasattr(self, '_test') and
-            (self._test == 'v2') and
-            (self._api_version == 'v3')):
-            raise testtools.TestCase.skipException('tests are not merged yet')
         self.flags(use_ipv6=False,
                    osapi_compute_link_prefix=self._get_host(),
                    osapi_glance_link_prefix=self._get_glance_host())
@@ -64,14 +56,11 @@ class ApiSampleTestBaseV3(testscenarios.WithScenarios,
             CONF.set_override('extensions_whitelist', whitelist,
                               'osapi_v3')
         expected_middleware = []
-        # TODO(gmann): Currently redirecting only merged tests
-        # after merging all tests, second condition needs to be removed.
-        if (not hasattr(self, '_test') or
-            ((self._test == 'v2.1') and (self._api_version == 'v2'))):
+        if (not hasattr(self, '_test') or (self._test == 'v2.1')):
             # NOTE(gmann)For v2.1 API testing, override /v2 endpoint with v2.1
             self.useFixture(api_paste_fixture.ApiPasteFixture())
             expected_middleware = [compute.APIRouterV21]
-        elif self._test == 'v2.1_compatible' and self._api_version == 'v2':
+        elif self._test == 'v2.1_compatible':
             self.useFixture(api_paste_fixture.ApiPasteV2CompatibleFixture())
             expected_middleware = [openstack.LegacyV2CompatibleWrapper,
                                    compute.APIRouterV21]
@@ -82,36 +71,3 @@ class ApiSampleTestBaseV3(testscenarios.WithScenarios,
         self.generate_samples = os.getenv('GENERATE_SAMPLES') is not None
         if expected_middleware:
             self._check_api_endpoint('/v2', expected_middleware)
-
-    @classmethod
-    def _get_sample_path(cls, name, dirname, suffix='', api_version=None):
-        parts = [dirname]
-        parts.append('api_samples')
-        if cls.all_extensions:
-            parts.append('all_extensions')
-        # Note(gmann): if _use_common_server_api_samples is set to True
-        # then common server sample files present in 'servers' directory
-        # will be used.
-        elif cls._use_common_server_api_samples:
-            parts.append('servers')
-        elif cls.sample_dir:
-            parts.append(cls.sample_dir)
-        elif cls.extension_name:
-            parts.append(cls.extension_name)
-        if api_version:
-            parts.append('v' + api_version)
-        parts.append(name + "." + cls.ctype + suffix)
-        return os.path.join(*parts)
-
-    @classmethod
-    def _get_sample(cls, name, api_version=None):
-        dirname = os.path.dirname(os.path.abspath(__file__))
-        dirname = os.path.normpath(os.path.join(dirname,
-                                                "../../../../doc"))
-        return cls._get_sample_path(name, dirname, api_version=api_version)
-
-    @classmethod
-    def _get_template(cls, name, api_version=None):
-        dirname = os.path.dirname(os.path.abspath(__file__))
-        return cls._get_sample_path(name, dirname, suffix='.tpl',
-                                    api_version=api_version)
