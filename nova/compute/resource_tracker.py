@@ -34,6 +34,7 @@ from nova import exception
 from nova.i18n import _, _LI, _LW
 from nova import objects
 from nova.objects import base as obj_base
+from nova.objects import migration as migration_obj
 from nova.pci import manager as pci_manager
 from nova import rpc
 from nova.scheduler import client as scheduler_client
@@ -162,38 +163,52 @@ class ResourceTracker(object):
     @utils.synchronized(COMPUTE_RESOURCE_SEMAPHORE)
     def resize_claim(self, context, instance, instance_type,
                      image_meta=None, limits=None):
-        """Indicate that resources are needed for a resize operation to this
-        compute host.
+        """Create a claim for a resize or cold-migration move."""
+        return self._move_claim(context, instance, instance_type,
+                                image_meta=image_meta, limits=limits)
+
+    def _move_claim(self, context, instance, new_instance_type, move_type=None,
+                    image_meta=None, limits=None, migration=None):
+        """Indicate that resources are needed for a move to this host.
+
+        Move can be either a migrate/resize, live-migrate or an
+        evacuate/rebuild operation.
+
         :param context: security context
         :param instance: instance object to reserve resources for
-        :param instance_type: new instance_type being resized to
+        :param new_instance_type: new instance_type being resized to
+        :param image_meta: instance image metadata
+        :param move_type: move type - can be one of 'migration', 'resize',
+                         'live-migration', 'evacuate'
         :param limits: Dict of oversubscription limits for memory, disk,
         and CPUs
+        :param migration: A migration object if one was already created
+                          elsewhere for this operation
         :returns: A Claim ticket representing the reserved resources.  This
         should be turned into finalize  a resource claim or free
         resources after the compute operation is finished.
         """
         image_meta = image_meta or {}
+        if migration:
+            self._claim_existing_migration(migration)
+        else:
+            migration = self._create_migration(context, instance,
+                                               new_instance_type, move_type)
 
         if self.disabled:
             # compute_driver doesn't support resource tracking, just
             # generate the migration record and continue the resize:
-            migration = self._create_migration(context, instance,
-                                               instance_type)
             return claims.NopClaim(migration=migration)
 
         # get memory overhead required to build this instance:
-        overhead = self.driver.estimate_instance_overhead(instance_type)
+        overhead = self.driver.estimate_instance_overhead(new_instance_type)
         LOG.debug("Memory overhead for %(flavor)d MB instance; %(overhead)d "
-                  "MB", {'flavor': instance_type.memory_mb,
+                  "MB", {'flavor': new_instance_type.memory_mb,
                           'overhead': overhead['memory_mb']})
 
-        claim = claims.MoveClaim(context, instance, instance_type,
+        claim = claims.MoveClaim(context, instance, new_instance_type,
                                  image_meta, self, self.compute_node,
                                  overhead=overhead, limits=limits)
-
-        migration = self._create_migration(context, instance,
-                                           instance_type)
         claim.migration = migration
 
         # Mark the resources in-use for the resize landing on this
@@ -205,7 +220,8 @@ class ResourceTracker(object):
 
         return claim
 
-    def _create_migration(self, context, instance, instance_type):
+    def _create_migration(self, context, instance, new_instance_type,
+                          move_type=None):
         """Create a migration record for the upcoming resize.  This should
         be done while the COMPUTE_RESOURCES_SEMAPHORE is held so the resource
         claim will not be lost if the audit process starts.
@@ -215,16 +231,32 @@ class ResourceTracker(object):
         migration.dest_node = self.nodename
         migration.dest_host = self.driver.get_host_ip_addr()
         migration.old_instance_type_id = instance.flavor.id
-        migration.new_instance_type_id = instance_type.id
+        migration.new_instance_type_id = new_instance_type.id
         migration.status = 'pre-migrating'
         migration.instance_uuid = instance.uuid
         migration.source_compute = instance.host
         migration.source_node = instance.node
-        migration.migration_type = (
-            migration.old_instance_type_id != migration.new_instance_type_id
-            and 'resize' or 'migration')
+        if move_type:
+            migration.migration_type = move_type
+        else:
+            migration.migration_type = migration_obj.determine_migration_type(
+                migration)
         migration.create()
         return migration
+
+    def _claim_existing_migration(self, migration):
+        """Make an existing migration record count for resource tracking.
+
+        If a migration record was created already before the request made
+        it to this compute host, only set up the migration so it's included in
+        resource tracking. This should be done while the
+        COMPUTE_RESOURCES_SEMAPHORE is held.
+        """
+        migration.dest_compute = self.host
+        migration.dest_node = self.nodename
+        migration.dest_host = self.driver.get_host_ip_addr()
+        migration.status = 'pre-migrating'
+        migration.save()
 
     def _set_instance_host_and_node(self, context, instance):
         """Tag the instance as belonging to this host.  This should be done
@@ -440,13 +472,6 @@ class ResourceTracker(object):
         migrations = objects.MigrationList.get_in_progress_by_host_and_node(
                 context, self.host, self.nodename)
 
-        # Only look at resize/migrate migration records
-        # NOTE(danms): RT should probably examine live migration
-        # records as well and do something smart. However, ignore
-        # those for now to avoid them being included in below calculations.
-        migrations = [migration for migration in migrations
-                      if migration.migration_type in ('resize', 'migrate')]
-
         self._update_usage_from_migrations(context, migrations)
 
         # Detect and account for orphaned instances that may exist on the
@@ -609,11 +634,21 @@ class ResourceTracker(object):
                 self.compute_node, usage, free)
         self.compute_node.numa_topology = updated_numa_topology
 
+    def _is_trackable_migration(self, migration):
+        # Only look at resize/migrate migration records
+        # NOTE(danms): RT should probably examine live migration
+        # records as well and do something smart. However, ignore
+        # those for now to avoid them being included in below calculations.
+        return migration.migration_type in ('resize', 'migration')
+
     def _update_usage_from_migration(self, context, instance, image_meta,
                                      migration):
         """Update usage for a single migration.  The record may
         represent an incoming or outbound migration.
         """
+        if not self._is_trackable_migration(migration):
+            return
+
         uuid = migration.instance_uuid
         LOG.info(_LI("Updating from migration %s") % uuid)
 

@@ -188,16 +188,17 @@ libvirt_opts = [
                default=75,
                help='Time to wait, in seconds, between each step increase '
                     'of the migration downtime. Minimum delay is %d seconds. '
-                    'Value is per GiB of guest RAM, with lower bound of a '
-                    'minimum of 2 GiB' % LIVE_MIGRATION_DOWNTIME_DELAY_MIN),
+                    'Value is per GiB of guest RAM + disk to be transferred, '
+                    'with lower bound of a minimum of 2 GiB per device' %
+                    LIVE_MIGRATION_DOWNTIME_DELAY_MIN),
     cfg.IntOpt('live_migration_completion_timeout',
                default=800,
                help='Time to wait, in seconds, for migration to successfully '
                     'complete transferring data before aborting the '
-                    'operation. Value is per GiB of guest RAM, with lower '
-                    'bound of a minimum of 2 GiB. Should usually be larger '
-                    'than downtime delay * downtime steps. Set to 0 to '
-                    'disable timeouts.'),
+                    'operation. Value is per GiB of guest RAM + disk to be '
+                    'transferred, with lower bound of a minimum of 2 GiB. '
+                    'Should usually be larger than downtime delay * downtime '
+                    'steps. Set to 0 to disable timeouts.'),
     cfg.IntOpt('live_migration_progress_timeout',
                default=150,
                help='Time to wait, in seconds, for migration to make forward '
@@ -354,34 +355,6 @@ def patch_tpool_proxy():
 
 
 patch_tpool_proxy()
-
-VIR_DOMAIN_NOSTATE = 0
-VIR_DOMAIN_RUNNING = 1
-VIR_DOMAIN_BLOCKED = 2
-VIR_DOMAIN_PAUSED = 3
-VIR_DOMAIN_SHUTDOWN = 4
-VIR_DOMAIN_SHUTOFF = 5
-VIR_DOMAIN_CRASHED = 6
-VIR_DOMAIN_PMSUSPENDED = 7
-
-LIBVIRT_POWER_STATE = {
-    VIR_DOMAIN_NOSTATE: power_state.NOSTATE,
-    VIR_DOMAIN_RUNNING: power_state.RUNNING,
-    # NOTE(maoy): The DOMAIN_BLOCKED state is only valid in Xen.
-    # It means that the VM is running and the vCPU is idle. So,
-    # we map it to RUNNING
-    VIR_DOMAIN_BLOCKED: power_state.RUNNING,
-    VIR_DOMAIN_PAUSED: power_state.PAUSED,
-    # NOTE(maoy): The libvirt API doc says that DOMAIN_SHUTDOWN
-    # means the domain is being shut down. So technically the domain
-    # is still running. SHUTOFF is the real powered off state.
-    # But we will map both to SHUTDOWN anyway.
-    # http://libvirt.org/html/libvirt-libvirt.html
-    VIR_DOMAIN_SHUTDOWN: power_state.SHUTDOWN,
-    VIR_DOMAIN_SHUTOFF: power_state.SHUTDOWN,
-    VIR_DOMAIN_CRASHED: power_state.CRASHED,
-    VIR_DOMAIN_PMSUSPENDED: power_state.SUSPENDED,
-}
 
 # This is effectively the min version for i686/x86_64 + KVM/QEMU
 # TODO(berrange) find out what min version ppc64 needs as it
@@ -4381,31 +4354,9 @@ class LibvirtDriver(driver.ComputeDriver):
 
         """
         guest = self._host.get_guest(instance)
-
-        # TODO(sahid): We are converting all calls from a
-        # virDomain object to use nova.virt.libvirt.Guest.
-        # We should be able to remove virt_dom at the end.
-        virt_dom = guest._domain
-        try:
-            dom_info = self._host.get_domain_info(virt_dom)
-        except libvirt.libvirtError as ex:
-            error_code = ex.get_error_code()
-            if error_code == libvirt.VIR_ERR_NO_DOMAIN:
-                raise exception.InstanceNotFound(instance_id=instance.uuid)
-
-            msg = (_('Error from libvirt while getting domain info for '
-                     '%(instance_name)s: [Error Code %(error_code)s] %(ex)s') %
-                   {'instance_name': instance.name,
-                    'error_code': error_code,
-                    'ex': ex})
-            raise exception.NovaException(msg)
-
-        return hardware.InstanceInfo(state=LIBVIRT_POWER_STATE[dom_info[0]],
-                                     max_mem_kb=dom_info[1],
-                                     mem_kb=dom_info[2],
-                                     num_cpu=dom_info[3],
-                                     cpu_time_ns=dom_info[4],
-                                     id=virt_dom.ID())
+        # Kind of ugly but we need to pass host to get_info as for a
+        # workaround, see libvirt/compat.py
+        return guest.get_info(self._host)
 
     def _create_domain_setup_lxc(self, instance, image_meta,
                                  block_device_info, disk_info):
@@ -5761,10 +5712,44 @@ class LibvirtDriver(driver.ComputeDriver):
         for i in range(steps + 1):
             yield (int(delay * i), int(offset + base ** i))
 
-    def _live_migration_data_gb(self, instance):
+    def _live_migration_copy_disk_paths(self, guest):
+        '''Get list of disks to copy during migration
+
+        :param guest: the Guest instance being migrated
+
+        Get the list of disks to copy during migration.
+
+        :returns: a list of local disk paths to copy
+        '''
+
+        disks = []
+        for dev in guest.get_all_disks():
+            # TODO(berrange) This is following the current
+            # (stupid) default logic in libvirt for selecting
+            # which disks are copied. In the future, when we
+            # can use a libvirt which accepts a list of disks
+            # to copy, we will need to adjust this to use a
+            # different rule.
+            #
+            # Our future goal is that a disk needs to be copied
+            # if it is a non-cinder volume which is not backed
+            # by shared storage. eg it may be an LVM block dev,
+            # or a raw/qcow2 file on a local filesystem. We
+            # never want to copy disks on NFS, or RBD or any
+            # cinder volume
+            if dev.readonly or dev.shareable:
+                continue
+            if dev.source_type not in ["file", "block"]:
+                continue
+            disks.append(dev.source_path)
+        return disks
+
+    def _live_migration_data_gb(self, instance, guest, block_migration):
         '''Calculate total amount of data to be transferred
 
         :param instance: the nova.objects.Instance being migrated
+        :param guest: the Guest being migrated
+        :param block_migration: true if block migration is requested
 
         Calculates the total amount of data that needs to be
         transferred during the live migration. The actual
@@ -5780,14 +5765,32 @@ class LibvirtDriver(driver.ComputeDriver):
         if ram_gb < 2:
             ram_gb = 2
 
-        # TODO(berrange) calculate size of any disks when doing
-        # a block migration
-        return ram_gb
+        if not block_migration:
+            return ram_gb
 
-    def _live_migration_monitor(self, context, instance, dest, post_method,
+        paths = self._live_migration_copy_disk_paths(guest)
+        disk_gb = 0
+        for path in paths:
+            try:
+                size = os.stat(path).st_size
+                size_gb = (size / units.Gi)
+                if size_gb < 2:
+                    size_gb = 2
+                disk_gb += size_gb
+            except OSError as e:
+                LOG.warn(_LW("Unable to stat %(disk)s: %(ex)s"),
+                         {'disk': path, 'ex': e})
+                # Ignore error since we don't want to break
+                # the migration monitoring thread operation
+
+        return ram_gb + disk_gb
+
+    def _live_migration_monitor(self, context, instance, guest,
+                                dest, post_method,
                                 recover_method, block_migration,
                                 migrate_data, dom, finish_event):
-        data_gb = self._live_migration_data_gb(instance)
+        data_gb = self._live_migration_data_gb(instance, guest,
+                                               block_migration)
         downtime_steps = list(self._migration_downtime_steps(data_gb))
         completion_timeout = int(
             CONF.libvirt.live_migration_completion_timeout * data_gb)
@@ -6024,7 +6027,7 @@ class LibvirtDriver(driver.ComputeDriver):
         try:
             LOG.debug("Starting monitoring of live migration",
                       instance=instance)
-            self._live_migration_monitor(context, instance, dest,
+            self._live_migration_monitor(context, instance, guest, dest,
                                          post_method, recover_method,
                                          block_migration, migrate_data,
                                          dom, finish_event)
@@ -6975,8 +6978,11 @@ class LibvirtDriver(driver.ComputeDriver):
         xml = guest.get_xml_desc()
         xml_doc = etree.fromstring(xml)
 
+        # TODO(sahid): Needs to use get_info but more changes have to
+        # be done since a mapping STATE_MAP LIBVIRT_POWER_STATE is
+        # needed.
         (state, max_mem, mem, num_cpu, cpu_time) = \
-            self._host.get_domain_info(domain)
+            guest._get_domain_info(self._host)
         config_drive = configdrive.required_by(instance)
         launched_at = timeutils.normalize_time(instance.launched_at)
         uptime = timeutils.delta_seconds(launched_at,
@@ -7173,5 +7179,9 @@ class LibvirtDriver(driver.ComputeDriver):
                            disk.FS_FORMAT_EXT4, disk.FS_FORMAT_XFS]
 
     def _get_power_state(self, virt_dom):
-        dom_info = self._host.get_domain_info(virt_dom)
-        return LIBVIRT_POWER_STATE[dom_info[0]]
+        # TODO(sahid): We should pass a guest object.
+        guest = libvirt_guest.Guest(virt_dom)
+        # TODO(sahid): Need to use guest.get_info. currently to many
+        # tests to have to be updated, will do the change soon.
+        info = guest._get_domain_info(self._host)
+        return libvirt_guest.LIBVIRT_POWER_STATE[info[0]]

@@ -65,6 +65,8 @@ changed. The user contract covers many kinds of information such as:
     Example: an API previously could return 200, 400, 403, 404 and the
     change would make the API now also be allowed to return 409.
 
+    See [#f2]_ for the 400 and 403 cases.
+
   - changing a status code on a particular response
 
     Example: changing the return code of an API from 501 to 400.
@@ -139,7 +141,7 @@ we need a microversion".
   to map the new error into the existing set of errors that API call
   could previously return (400 if nothing else is appropriate). Changing
   the set of allowed status codes from a request is changing the
-  contract, and should be part of a microversion.
+  contract, and should be part of a microversion (except in [#f2]_).
 
   The reason why we are so strict on contract is that we'd like
   application writers to be able to know, for sure, what the contract is
@@ -150,6 +152,12 @@ we need a microversion".
   client side changes on both Nova versions, you probably don't need a
   microversion. If, on the other hand, there is any ambiguity, a
   microversion is probably needed.
+
+.. [#f2] The exception to not needing a microversion when returning a
+  previously unspecified error code is the 400 and 403 cases. This is
+  considered OK to return even if previously unspecified in the code since
+  it's implied given keystone authentication can fail with a 403 and API
+  validation can fail with a 400 for invalid json request body.
 
 
 In Code
@@ -298,6 +306,10 @@ necessary to add changes to other places which describe your change:
 
 * Update the expected versions in affected tests, for example in
   ``nova/tests/unit/api/openstack/compute/test_versions.py``.
+
+* Update the get versions api sample files:
+  ``doc/api_samples/versions/versions-get-resp.json`` and
+  ``nova/tests/functional/api_samples/versions/versions-get-resp.json.tpl``.
 
 Allocating a microversion
 -------------------------
