@@ -6989,6 +6989,8 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
                                  pci_stats='',
                                  metrics='',
                                  extra_resources='',
+                                 cpu_allocation_ratio=16.0,
+                                 ram_allocation_ratio=1.5,
                                  stats='', numa_topology='')
         # add some random stats
         self.stats = dict(num_instances=3, num_proj_12345=2,
@@ -8815,6 +8817,19 @@ class TestDBInstanceTags(test.TestCase):
         tags = self._get_tags_from_resp(tag_refs)
         expected = [(uuid, tag3), (uuid, tag4), (uuid, tag2)]
         self.assertEqual(set(expected), set(tags))
+
+    @mock.patch('sqlalchemy.orm.query.Query.delete')
+    def test_instance_tag_set_empty_delete(self, mock_delete):
+        uuid = self._create_instance()
+        db.instance_tag_set(self.context, uuid, ['tag1', 'tag2'])
+
+        # Check delete() wasn't called because there are no tags for deletion
+        mock_delete.assert_not_called()
+
+        db.instance_tag_set(self.context, uuid, ['tag1', 'tag3'])
+
+        # Check delete() was called to delete 'tag2'
+        mock_delete.assert_called_once_with(synchronize_session=False)
 
     def test_instance_tag_get_by_instance_uuid(self):
         uuid1 = self._create_instance()

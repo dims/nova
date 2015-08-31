@@ -172,6 +172,10 @@ class ComputeNode(BASE, NovaBase):
     # objects.NUMATopoloogy._to_json()
     numa_topology = Column(Text)
 
+    # allocation ratios provided by the RT
+    ram_allocation_ratio = Column(Float, nullable=True)
+    cpu_allocation_ratio = Column(Float, nullable=True)
+
 
 class Certificate(BASE, NovaBase):
     """Represents a x509 certificate."""
@@ -364,6 +368,7 @@ class InstanceExtra(BASE, NovaBase):
     pci_requests = orm.deferred(Column(Text))
     flavor = orm.deferred(Column(Text))
     vcpu_model = orm.deferred(Column(Text))
+    migration_context = orm.deferred(Column(Text))
     instance = orm.relationship(Instance,
                             backref=orm.backref('extra',
                                                 uselist=False),

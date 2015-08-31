@@ -2721,7 +2721,8 @@ def instance_extra_get_by_instance_uuid(context, instance_uuid,
     query = model_query(context, models.InstanceExtra).\
         filter_by(instance_uuid=instance_uuid)
     if columns is None:
-        columns = ['numa_topology', 'pci_requests', 'flavor', 'vcpu_model']
+        columns = ['numa_topology', 'pci_requests', 'flavor', 'vcpu_model',
+                   'migration_context']
     for column in columns:
         query = query.options(undefer(column))
     instance_extra = query.first()
@@ -6406,8 +6407,11 @@ def instance_tag_set(context, instance_uuid, tags):
         to_delete = existing - tags
         to_add = tags - existing
 
-        session.query(models.Tag).filter_by(resource_id=instance_uuid).filter(
-            models.Tag.tag.in_(to_delete)).delete(synchronize_session=False)
+        if to_delete:
+            session.query(models.Tag).filter_by(
+                resource_id=instance_uuid).filter(
+                models.Tag.tag.in_(to_delete)).delete(
+                synchronize_session=False)
 
         data = [{'resource_id': instance_uuid, 'tag': tag} for tag in to_add]
         session.execute(models.Tag.__table__.insert(), data)
