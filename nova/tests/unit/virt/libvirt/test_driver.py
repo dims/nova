@@ -6197,7 +6197,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             self.assertFalse(drvr._live_migration_operation(
                              self.context, instance_ref, 'dest', False,
                              migrate_data, test_mock))
-            mupdate.assert_called_once_with(target_xml, volume, None)
+            mupdate.assert_called_once_with(target_xml, volume, None, None)
 
     def test_update_volume_xml(self):
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
@@ -6331,6 +6331,63 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             config = drvr._update_volume_xml(xml_doc,
                                              volume_xml['volume'])
             self.assertEqual(target_xml, etree.tostring(config))
+
+    @mock.patch.object(fakelibvirt.virDomain, "migrateToURI2")
+    @mock.patch.object(fakelibvirt.virDomain, "XMLDesc")
+    def test_live_migration_update_serial_console_xml(self, mock_xml,
+                                                      mock_migrate):
+        self.compute = importutils.import_object(CONF.compute_manager)
+        instance_ref = self.test_instance
+
+        xml_tmpl = ("<domain type='kvm'>"
+                    "<devices>"
+                    "<console type='tcp'>"
+                    "<source mode='bind' host='{addr}' service='10000'/>"
+                    "</console>"
+                    "</devices>"
+                    "</domain>")
+
+        initial_xml = xml_tmpl.format(addr='9.0.0.1')
+
+        target_xml = xml_tmpl.format(addr='9.0.0.12')
+        target_xml = etree.tostring(etree.fromstring(target_xml))
+
+        # Preparing mocks
+        mock_xml.return_value = initial_xml
+        mock_migrate.side_effect = fakelibvirt.libvirtError("ERR")
+
+        # start test
+        bandwidth = CONF.libvirt.live_migration_bandwidth
+        migrate_data = {'pre_live_migration_result':
+                {'graphics_listen_addrs':
+                    {'vnc': '10.0.0.1', 'spice': '10.0.0.2'},
+                 'serial_listen_addr': '9.0.0.12'}}
+        dom = fakelibvirt.virDomain
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        self.assertRaises(fakelibvirt.libvirtError,
+                          drvr._live_migration_operation,
+                          self.context, instance_ref, 'dest',
+                          False, migrate_data, dom)
+        mock_xml.assert_called_once_with(
+                flags=fakelibvirt.VIR_DOMAIN_XML_MIGRATABLE)
+        mock_migrate.assert_called_once_with(
+                CONF.libvirt.live_migration_uri % 'dest',
+                None, target_xml, mock.ANY, None, bandwidth)
+
+    @mock.patch.object(fakelibvirt, 'VIR_DOMAIN_XML_MIGRATABLE', None,
+                       create=True)
+    def test_live_migration_fails_with_serial_console_without_migratable(self):
+        self.compute = importutils.import_object(CONF.compute_manager)
+        instance_ref = self.test_instance
+
+        CONF.set_override("enabled", True, "serial_console")
+        dom = fakelibvirt.virDomain
+
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        self.assertRaises(exception.MigrationError,
+                          drvr._live_migration_operation,
+                          self.context, instance_ref, 'dest',
+                          False, None, dom)
 
     @mock.patch.object(fakelibvirt, 'VIR_DOMAIN_XML_MIGRATABLE', None,
                        create=True)
@@ -7230,6 +7287,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
 
         target_ret = {
         'graphics_listen_addrs': {'spice': '127.0.0.1', 'vnc': '127.0.0.1'},
+        'serial_listen_addr': '127.0.0.1',
         'volume': {
          '12345': {'connection_info': {u'data': {'device_path':
               u'/dev/disk/by-path/ip-1.2.3.4:3260-iqn.abc.12345.opst-lun-X'},
@@ -7292,6 +7350,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         )
         self.assertEqual({'graphics_listen_addrs': {'spice': '127.0.0.1',
                                                     'vnc': '127.0.0.1'},
+                          'serial_listen_addr': '127.0.0.1',
                           'volume': {}}, res_data)
 
     def test_pre_live_migration_vol_backed_works_correctly_mocked(self):
@@ -7344,6 +7403,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             target_ret = {
             'graphics_listen_addrs': {'spice': '127.0.0.1',
                                       'vnc': '127.0.0.1'},
+            'serial_listen_addr': '127.0.0.1',
             'volume': {
             '12345': {'connection_info': {u'data': {'device_path':
               u'/dev/disk/by-path/ip-1.2.3.4:3260-iqn.abc.12345.opst-lun-X'},
@@ -11745,7 +11805,10 @@ class LibvirtConnTestCase(test.NoDBTestCase):
 
         # Ensure _get_serial_ports_from_instance raises same exception
         # that would have occurred if domain was gone.
-        get_ports.side_effect = exception.InstanceNotFound("domain undefined")
+        def exception_with_yield(instance):
+            raise exception.InstanceNotFound("domain undefined")
+            yield
+        get_ports.side_effect = exception_with_yield
 
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI())
         drvr.firewall_driver = firewall_driver
@@ -13995,6 +14058,34 @@ class LibvirtVolumeSnapshotTestCase(test.NoDBTestCase):
               </domain>
         """
 
+        # XML with netdisk attached, and 1 snapshot taken
+        self.dom_netdisk_xml_2 = """
+              <domain type='kvm'>
+                <devices>
+                  <disk type='file'>
+                    <source file='disk1_file'/>
+                    <target dev='vda' bus='virtio'/>
+                    <serial>0e38683e-f0af-418f-a3f1-6b67eaffffff</serial>
+                  </disk>
+                  <disk type='network' device='disk'>
+                    <driver name='qemu' type='qcow2'/>
+                    <source protocol='gluster' name='vol1/snap.img'>
+                      <host name='server1' port='24007'/>
+                    </source>
+                    <backingStore type='network' index='1'>
+                      <driver name='qemu' type='qcow2'/>
+                      <source protocol='gluster' name='vol1/root.img'>
+                        <host name='server1' port='24007'/>
+                      </source>
+                      <backingStore/>
+                    </backingStore>
+                    <target dev='vdb' bus='virtio'/>
+                    <serial>0e38683e-f0af-418f-a3f1-6b67ea0f919d</serial>
+                  </disk>
+                </devices>
+              </domain>
+        """
+
         self.create_info = {'type': 'qcow2',
                             'snapshot_id': '1234-5678',
                             'new_file': 'new-file'}
@@ -14447,6 +14538,39 @@ class LibvirtVolumeSnapshotTestCase(test.NoDBTestCase):
             mock_has_min_version.assert_called_once_with((1, 1, 1,))
             mock_rebase.assert_called_once_with('vda', None, 0, flags=0)
             mock_job_info.assert_called_once_with('vda', flags=0)
+
+    def test_volume_snapshot_delete_netdisk_nonrelative_null_base(self):
+        # Deleting newest and last snapshot of a network attached volume
+        # with blockRebase. So base of the new image will be null.
+
+        instance = objects.Instance(**self.inst)
+        snapshot_id = 'snapshot-1234'
+
+        domain = FakeVirtDomain(fake_xml=self.dom_netdisk_xml_2)
+        guest = libvirt_guest.Guest(domain)
+
+        with contextlib.nested(
+            mock.patch.object(domain, 'XMLDesc',
+                              return_value=self.dom_netdisk_xml_2),
+            mock.patch.object(self.drvr._host, 'get_guest',
+                              return_value=guest),
+            mock.patch.object(self.drvr._host, 'has_min_version',
+                              return_value=True),
+            mock.patch.object(domain, 'blockRebase'),
+            mock.patch.object(domain, 'blockJobInfo',
+                              return_value={'cur': 1000, 'end': 1000})
+        ) as (mock_xmldesc, mock_get_guest, mock_has_min_version,
+              mock_rebase, mock_job_info):
+
+            self.drvr._volume_snapshot_delete(self.c, instance,
+                                              self.volume_uuid, snapshot_id,
+                                              self.delete_info_3)
+
+            mock_xmldesc.assert_called_once_with(flags=0)
+            mock_get_guest.assert_called_once_with(instance)
+            mock_has_min_version.assert_called_once_with((1, 1, 1,))
+            mock_rebase.assert_called_once_with('vdb', None, 0, flags=0)
+            mock_job_info.assert_called_once_with('vdb', flags=0)
 
     def test_volume_snapshot_delete_outer_success(self):
         instance = objects.Instance(**self.inst)

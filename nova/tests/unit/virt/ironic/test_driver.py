@@ -75,6 +75,12 @@ def _get_properties():
             'capabilities': None}
 
 
+def _get_instance_info():
+    return {'vcpus': 1,
+            'memory_mb': 1024,
+            'local_gb': 10}
+
+
 def _get_stats():
     return {'cpu_arch': 'x86_64'}
 
@@ -242,8 +248,10 @@ class IronicDriverTestCase(test.NoDBTestCase):
         node_uuid = uuidutils.generate_uuid()
         props = _get_properties()
         stats = _get_stats()
+        instance_info = _get_instance_info()
         node = ironic_utils.get_test_node(uuid=node_uuid,
                                           instance_uuid=self.instance_uuid,
+                                          instance_info=instance_info,
                                           properties=props)
 
         result = self.driver._node_resource(node)
@@ -261,12 +269,12 @@ class IronicDriverTestCase(test.NoDBTestCase):
         gotkeys = result.keys()
         gotkeys.sort()
         self.assertEqual(wantkeys, gotkeys)
-        self.assertEqual(props['cpus'], result['vcpus'])
-        self.assertEqual(props['cpus'], result['vcpus_used'])
-        self.assertEqual(props['memory_mb'], result['memory_mb'])
-        self.assertEqual(props['memory_mb'], result['memory_mb_used'])
-        self.assertEqual(props['local_gb'], result['local_gb'])
-        self.assertEqual(props['local_gb'], result['local_gb_used'])
+        self.assertEqual(instance_info['vcpus'], result['vcpus'])
+        self.assertEqual(instance_info['vcpus'], result['vcpus_used'])
+        self.assertEqual(instance_info['memory_mb'], result['memory_mb'])
+        self.assertEqual(instance_info['memory_mb'], result['memory_mb_used'])
+        self.assertEqual(instance_info['local_gb'], result['local_gb'])
+        self.assertEqual(instance_info['local_gb'], result['local_gb_used'])
         self.assertEqual(node_uuid, result['hypervisor_hostname'])
         self.assertEqual(stats, jsonutils.loads(result['stats']))
         self.assertIsNone(result['numa_topology'])
@@ -366,19 +374,21 @@ class IronicDriverTestCase(test.NoDBTestCase):
         node_uuid = uuidutils.generate_uuid()
         props = _get_properties()
         stats = _get_stats()
+        instance_info = _get_instance_info()
         node = ironic_utils.get_test_node(
             uuid=node_uuid,
             instance_uuid=uuidutils.generate_uuid(),
             provision_state=ironic_states.ACTIVE,
-            properties=props)
+            properties=props,
+            instance_info=instance_info)
 
         result = self.driver._node_resource(node)
-        self.assertEqual(props['cpus'], result['vcpus'])
-        self.assertEqual(props['cpus'], result['vcpus_used'])
-        self.assertEqual(props['memory_mb'], result['memory_mb'])
-        self.assertEqual(props['memory_mb'], result['memory_mb_used'])
-        self.assertEqual(props['local_gb'], result['local_gb'])
-        self.assertEqual(props['local_gb'], result['local_gb_used'])
+        self.assertEqual(instance_info['vcpus'], result['vcpus'])
+        self.assertEqual(instance_info['vcpus'], result['vcpus_used'])
+        self.assertEqual(instance_info['memory_mb'], result['memory_mb'])
+        self.assertEqual(instance_info['memory_mb'], result['memory_mb_used'])
+        self.assertEqual(instance_info['local_gb'], result['local_gb'])
+        self.assertEqual(instance_info['local_gb'], result['local_gb_used'])
         self.assertEqual(node_uuid, result['hypervisor_hostname'])
         self.assertEqual(stats, jsonutils.loads(result['stats']))
 
@@ -420,6 +430,32 @@ class IronicDriverTestCase(test.NoDBTestCase):
         expected_props['cpu_arch'] = None
         self.assertEqual(expected_props, parsed)
         self.assertEqual(4, mock_warning.call_count)
+
+    @mock.patch.object(ironic_driver.LOG, 'warning')
+    def test__parse_node_instance_info(self, mock_warning):
+        instance_info = _get_instance_info()
+        node = ironic_utils.get_test_node(
+            uuid=uuidutils.generate_uuid(),
+            instance_info=instance_info)
+        parsed = self.driver._parse_node_instance_info(node)
+
+        self.assertEqual(instance_info, parsed)
+        self.assertFalse(mock_warning.called)
+
+    @mock.patch.object(ironic_driver.LOG, 'warning')
+    def test__parse_node_instance_info_bad_values(self, mock_warning):
+        instance_info = _get_instance_info()
+        instance_info['vcpus'] = 'bad-value'
+        instance_info['memory_mb'] = 'bad-value'
+        instance_info['local_gb'] = 'bad-value'
+        node = ironic_utils.get_test_node(
+            uuid=uuidutils.generate_uuid(),
+            instance_info=instance_info)
+        parsed = self.driver._parse_node_instance_info(node)
+
+        expected = {'vcpus': 0, 'memory_mb': 0, 'local_gb': 0}
+        self.assertEqual(expected, parsed)
+        self.assertEqual(3, mock_warning.call_count)
 
     @mock.patch.object(ironic_driver.LOG, 'warning')
     def test__parse_node_properties_canonicalize_cpu_arch(self, mock_warning):
@@ -763,11 +799,15 @@ class IronicDriverTestCase(test.NoDBTestCase):
         fake_looping_call = FakeLoopingCall()
         mock_looping.return_value = fake_looping_call
 
-        self.driver.spawn(self.ctx, instance, None, [], None)
+        image_meta = ironic_utils.get_test_image_meta()
+
+        self.driver.spawn(self.ctx, instance, image_meta, [], None)
 
         mock_node.get.assert_called_once_with(node_uuid)
         mock_node.validate.assert_called_once_with(node_uuid)
-        mock_adf.assert_called_once_with(node, instance, None, fake_flavor)
+        mock_adf.assert_called_once_with(node, instance,
+                                         test.MatchType(objects.ImageMeta),
+                                         fake_flavor)
         mock_pvifs.assert_called_once_with(node, instance, None)
         mock_sf.assert_called_once_with(instance, None)
         mock_node.set_provision_state.assert_called_once_with(node_uuid,
@@ -839,17 +879,23 @@ class IronicDriverTestCase(test.NoDBTestCase):
         node = ironic_utils.get_test_node(driver='fake')
         instance = fake_instance.fake_instance_obj(self.ctx,
                                                    node=node.uuid)
-        image_meta = ironic_utils.get_test_image_meta()
+        image_meta = ironic_utils.get_test_image_meta_object()
         flavor = ironic_utils.get_test_flavor()
         self.driver._add_driver_fields(node, instance, image_meta, flavor)
         expected_patch = [{'path': '/instance_info/image_source', 'op': 'add',
-                           'value': image_meta['id']},
+                           'value': image_meta.id},
                           {'path': '/instance_info/root_gb', 'op': 'add',
                            'value': str(instance.root_gb)},
                           {'path': '/instance_info/swap_mb', 'op': 'add',
                            'value': str(flavor['swap'])},
                           {'path': '/instance_info/display_name',
                            'value': instance.display_name, 'op': 'add'},
+                          {'path': '/instance_info/vcpus', 'op': 'add',
+                           'value': str(instance.vcpus)},
+                          {'path': '/instance_info/memory_mb', 'op': 'add',
+                           'value': str(instance.memory_mb)},
+                          {'path': '/instance_info/local_gb', 'op': 'add',
+                           'value': str(node.properties.get('local_gb', 0))},
                           {'path': '/instance_uuid', 'op': 'add',
                            'value': instance.uuid}]
         mock_update.assert_called_once_with(node.uuid, expected_patch)
@@ -860,7 +906,7 @@ class IronicDriverTestCase(test.NoDBTestCase):
         node = ironic_utils.get_test_node(driver='fake')
         instance = fake_instance.fake_instance_obj(self.ctx,
                                                    node=node.uuid)
-        image_meta = ironic_utils.get_test_image_meta()
+        image_meta = ironic_utils.get_test_image_meta_object()
         flavor = ironic_utils.get_test_flavor()
         self.assertRaises(exception.InstanceDeployFailure,
                           self.driver._add_driver_fields,
@@ -1499,8 +1545,10 @@ class IronicDriverTestCase(test.NoDBTestCase):
 
         mock_save.assert_called_once_with(
             expected_task_state=[task_states.REBUILDING])
-        mock_driver_fields.assert_called_once_with(node, instance, image_meta,
-                                                   flavor, preserve)
+        mock_driver_fields.assert_called_once_with(
+            node, instance,
+            test.MatchType(objects.ImageMeta),
+            flavor, preserve)
         mock_set_pstate.assert_called_once_with(node_uuid,
                                                 ironic_states.REBUILD)
         mock_looping.assert_called_once_with(mock_wait_active,

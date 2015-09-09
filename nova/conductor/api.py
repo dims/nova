@@ -61,19 +61,15 @@ class LocalAPI(object):
         # nothing to wait for in the local case.
         pass
 
-    def instance_update(self, context, instance_uuid, **updates):
-        """Perform an instance update in the database."""
-        return self._manager.instance_update(context, instance_uuid,
-                                             updates, 'compute')
-
     def provider_fw_rule_get_all(self, context):
         return self._manager.provider_fw_rule_get_all(context)
 
-    def compute_node_create(self, context, values):
-        return self._manager.compute_node_create(context, values)
-
     def object_backport(self, context, objinst, target_version):
         return self._manager.object_backport(context, objinst, target_version)
+
+    def object_backport_versions(self, context, objinst, object_versions):
+        return self._manager.object_backport_versions(context, objinst,
+                                                      object_versions)
 
 
 class LocalComputeTaskAPI(object):
@@ -183,11 +179,6 @@ class API(LocalAPI):
                                 'before nova-conductor?  '
                                 'Reattempting establishment of '
                                 'nova-conductor connection...'))
-
-    def instance_update(self, context, instance_uuid, **updates):
-        """Perform an instance update in the database."""
-        return self._manager.instance_update(context, instance_uuid,
-                                             updates, 'conductor')
 
 
 class ComputeTaskAPI(object):

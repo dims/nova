@@ -18,6 +18,7 @@
 from oslo_config import cfg
 import oslo_messaging as messaging
 from oslo_serialization import jsonutils
+from oslo_versionedobjects import base as ovo_base
 
 from nova.objects import base as objects_base
 from nova import rpc
@@ -182,7 +183,11 @@ class ConductorAPI(object):
     * Remove task_log_end_task()
     * Remove security_groups_trigger_members_refresh()
     * Remove vol_usage_update()
+    * Remove instance_update()
 
+    * 2.2 - Add object_backport_versions()
+    * 2.3 - Add object_class_action_versions()
+    * Remove compute_node_create()
     """
 
     VERSION_ALIASES = {
@@ -203,29 +208,34 @@ class ConductorAPI(object):
                                      version_cap=version_cap,
                                      serializer=serializer)
 
-    def instance_update(self, context, instance_uuid, updates,
-                        service=None):
-        updates_p = jsonutils.to_primitive(updates)
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'instance_update',
-                          instance_uuid=instance_uuid,
-                          updates=updates_p,
-                          service=service)
-
     def provider_fw_rule_get_all(self, context):
         cctxt = self.client.prepare()
         return cctxt.call(context, 'provider_fw_rule_get_all')
 
-    def compute_node_create(self, context, values):
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'compute_node_create', values=values)
-
     def object_class_action(self, context, objname, objmethod, objver,
                             args, kwargs):
+        if self.client.can_send_version('2.3'):
+            # NOTE(danms): If we're new enough, collect the object
+            # version manifest and redirect the call to the newer
+            # class action handler
+            versions = ovo_base.obj_tree_get_versions(objname)
+            return self.object_class_action_versions(context,
+                                                     objname,
+                                                     objmethod,
+                                                     versions,
+                                                     args, kwargs)
         cctxt = self.client.prepare()
         return cctxt.call(context, 'object_class_action',
                           objname=objname, objmethod=objmethod,
                           objver=objver, args=args, kwargs=kwargs)
+
+    def object_class_action_versions(self, context, objname, objmethod,
+                                     object_versions, args, kwargs):
+        cctxt = self.client.prepare(version='2.3')
+        return cctxt.call(context, 'object_class_action_versions',
+                          objname=objname, objmethod=objmethod,
+                          object_versions=object_versions,
+                          args=args, kwargs=kwargs)
 
     def object_action(self, context, objinst, objmethod, args, kwargs):
         cctxt = self.client.prepare()
@@ -236,6 +246,11 @@ class ConductorAPI(object):
         cctxt = self.client.prepare()
         return cctxt.call(context, 'object_backport', objinst=objinst,
                           target_version=target_version)
+
+    def object_backport_versions(self, context, objinst, object_versions):
+        cctxt = self.client.prepare(version='2.2')
+        return cctxt.call(context, 'object_backport_versions', objinst=objinst,
+                          object_versions=object_versions)
 
 
 class ComputeTaskAPI(object):

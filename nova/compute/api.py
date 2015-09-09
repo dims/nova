@@ -429,10 +429,12 @@ class API(base.Base):
                 msg = (_("Can only run %s more instances of this type.") %
                        allowed)
 
-            resource = overs[0]
-            used = quotas[resource] - headroom[resource]
-            total_allowed = quotas[resource]
-            overs = ','.join(overs)
+            num_instances = (str(min_count) if min_count == max_count else
+                "%s-%s" % (min_count, max_count))
+            requested = dict(instances=num_instances, cores=req_cores,
+                             ram=req_ram)
+            (overs, reqs, total_alloweds, useds) = self._get_over_quota_detail(
+                headroom, overs, quotas, requested)
             params = {'overs': overs, 'pid': context.project_id,
                       'min_count': min_count, 'max_count': max_count,
                       'msg': msg}
@@ -446,17 +448,24 @@ class API(base.Base):
                            " tried to run between %(min_count)d and"
                            " %(max_count)d instances. %(msg)s"),
                           params)
-
-            num_instances = (str(min_count) if min_count == max_count else
-                "%s-%s" % (min_count, max_count))
-            requested = dict(instances=num_instances, cores=req_cores,
-                             ram=req_ram)
             raise exception.TooManyInstances(overs=overs,
-                                             req=requested[resource],
-                                             used=used, allowed=total_allowed,
-                                             resource=resource)
+                                             req=reqs,
+                                             used=useds,
+                                             allowed=total_alloweds)
 
         return max_count, quotas
+
+    def _get_over_quota_detail(self, headroom, overs, quotas, requested):
+        reqs = []
+        useds = []
+        total_alloweds = []
+        for resource in overs:
+            reqs.append(str(requested[resource]))
+            useds.append(str(quotas[resource] - headroom[resource]))
+            total_alloweds.append(str(quotas[resource]))
+        (overs, reqs, useds, total_alloweds) = map(', '.join, (
+            overs, reqs, useds, total_alloweds))
+        return overs, reqs, total_alloweds, useds
 
     def _check_metadata_properties_quota(self, context, metadata=None):
         """Enforce quota limits on metadata properties."""
@@ -705,10 +714,8 @@ class API(base.Base):
                 dest_size *= units.Gi
 
                 if image_min_disk > dest_size:
-                    # TODO(mdbooth) Raise a more descriptive exception here.
-                    # This is the exception which calling code expects, but
-                    # it's potentially misleading to the user.
-                    raise exception.FlavorDiskTooSmall()
+                    raise exception.VolumeSmallerThanMinDisk(
+                        volume_size=dest_size, image_min_disk=image_min_disk)
 
         # Target disk is a local disk whose size is taken from the flavor
         else:
@@ -719,10 +726,12 @@ class API(base.Base):
             # drivers. A value of 0 means don't check size.
             if dest_size != 0:
                 if image_size > dest_size:
-                    raise exception.FlavorDiskTooSmall()
+                    raise exception.FlavorDiskSmallerThanImage(
+                        flavor_size=dest_size, image_size=image_size)
 
                 if image_min_disk > dest_size:
-                    raise exception.FlavorDiskTooSmall()
+                    raise exception.FlavorDiskSmallerThanMinDisk(
+                        flavor_size=dest_size, image_min_disk=image_min_disk)
 
     def _get_image_defined_bdms(self, base_options, instance_type, image_meta,
                                 root_device_name):
@@ -966,15 +975,13 @@ class API(base.Base):
         return base_options, max_network_count
 
     def _build_filter_properties(self, context, scheduler_hints, forced_host,
-            forced_node, instance_type, pci_request_info):
+            forced_node, instance_type):
         filter_properties = dict(scheduler_hints=scheduler_hints)
         filter_properties['instance_type'] = instance_type
         if forced_host:
             filter_properties['force_hosts'] = [forced_host]
         if forced_node:
             filter_properties['force_nodes'] = [forced_node]
-        if pci_request_info and pci_request_info.requests:
-            filter_properties['pci_requests'] = pci_request_info
         return filter_properties
 
     def _provision_instances(self, context, instance_type, min_count,
@@ -1185,8 +1192,7 @@ class API(base.Base):
 
         filter_properties = self._build_filter_properties(context,
                 scheduler_hints, forced_host,
-                forced_node, instance_type,
-                base_options.get('pci_requests'))
+                forced_node, instance_type)
 
         for instance in instances:
             self._record_action_start(context, instance,
@@ -2639,19 +2645,16 @@ class API(base.Base):
                 overs = exc.kwargs['overs']
                 usages = exc.kwargs['usages']
                 headroom = self._get_headroom(quotas, usages, deltas)
-
-                resource = overs[0]
-                used = quotas[resource] - headroom[resource]
-                total_allowed = used + headroom[resource]
-                overs = ','.join(overs)
+                (overs, reqs, total_alloweds,
+                 useds) = self._get_over_quota_detail(headroom, overs, quotas,
+                                                      deltas)
                 LOG.warning(_LW("%(overs)s quota exceeded for %(pid)s,"
                                 " tried to resize instance."),
                             {'overs': overs, 'pid': context.project_id})
                 raise exception.TooManyInstances(overs=overs,
-                                                 req=deltas[resource],
-                                                 used=used,
-                                                 allowed=total_allowed,
-                                                 resource=resource)
+                                                 req=reqs,
+                                                 used=useds,
+                                                 allowed=total_alloweds)
         else:
             quotas = objects.Quotas(context=context)
 

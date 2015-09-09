@@ -1520,6 +1520,11 @@ class ServersControllerRebuildInstanceTest(ControllerTest):
         self.req.method = 'POST'
         self.req.headers["content-type"] = "application/json"
 
+    def test_rebuild_instance_name_with_spaces_in_the_middle(self):
+        self.body['rebuild']['name'] = 'abc   def'
+        self.req.body = jsonutils.dumps(self.body)
+        self.controller._action_rebuild(self.req, FAKE_UUID, body=self.body)
+
     def test_rebuild_instance_with_blank_metadata_key(self):
         self.body['rebuild']['metadata'][''] = 'world'
         self.req.body = jsonutils.dumps(self.body)
@@ -1821,6 +1826,16 @@ class ServersControllerUpdateTest(ControllerTest):
         req.body = jsonutils.dumps(body)
         self.assertRaises(exception.ValidationError, self.controller.update,
                           req, FAKE_UUID, body=body)
+
+    def test_update_server_name_with_spaces_in_the_middle(self):
+        self.stubs.Set(db, 'instance_get',
+                fakes.fake_instance_get(name='server_test'))
+        req = fakes.HTTPRequest.blank('/fake/servers/%s' % FAKE_UUID)
+        req.method = 'PUT'
+        req.content_type = 'application/json'
+        body = {'server': {'name': 'abc   def'}}
+        req.body = jsonutils.dumps(body)
+        self.controller.update(req, FAKE_UUID, body=body)
 
     def test_update_server_admin_password_extra_arg(self):
         inst_dict = dict(name='server_test', admin_password='bacon')
@@ -2364,6 +2379,14 @@ class ServersControllerCreateTest(test.TestCase):
         self.assertRaises(exception.ValidationError, self.controller.create,
                           self.req, body=self.body)
 
+    def test_create_instance_name_with_spaces_in_the_middle(self):
+        # proper local hrefs must start with 'http://localhost/v2/'
+        image_href = 'http://localhost/v2/images/%s' % self.image_uuid
+        self.body['server']['name'] = 'abc    def'
+        self.body['server']['imageRef'] = image_href
+        self.req.body = jsonutils.dumps(self.body)
+        self.controller.create(self.req, body=self.body)
+
     def test_create_instance_name_all_blank_spaces(self):
         # proper local hrefs must start with 'http://localhost/v2/'
         image_uuid = '76fa36fc-c930-4bf3-8c8a-ea2a2420deb6'
@@ -2662,8 +2685,10 @@ class ServersControllerCreateTest(test.TestCase):
         self._do_test_create_instance_above_quota('cores', 1, 10, msg)
 
     def test_create_instance_above_quota_server_group_members(self):
-        ctxt = context.get_admin_context()
+        ctxt = self.req.environ['nova.context']
         fake_group = objects.InstanceGroup(ctxt)
+        fake_group.project_id = ctxt.project_id
+        fake_group.user_id = ctxt.user_id
         fake_group.create()
 
         def fake_count(context, name, group, user_id):
@@ -2694,8 +2719,10 @@ class ServersControllerCreateTest(test.TestCase):
             self.assertEqual(e.explanation, expected_msg)
 
     def test_create_instance_with_group_hint(self):
-        ctxt = context.get_admin_context()
+        ctxt = self.req.environ['nova.context']
         test_group = objects.InstanceGroup(ctxt)
+        test_group.project_id = ctxt.project_id
+        test_group.user_id = ctxt.user_id
         test_group.create()
 
         def fake_instance_destroy(context, uuid, constraint):

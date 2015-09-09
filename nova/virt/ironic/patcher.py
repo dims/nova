@@ -47,8 +47,7 @@ class GenericDriverFields(object):
         """Build a patch to add the required fields to deploy a node.
 
         :param instance: the instance object.
-        :param image_meta: the metadata associated with the instance
-                           image.
+        :param image_meta: the nova.objects.ImageMeta object instance
         :param flavor: the flavor object.
         :param preserve_ephemeral: preserve_ephemeral status (bool) to be
                                    specified during rebuild.
@@ -57,13 +56,19 @@ class GenericDriverFields(object):
         """
         patch = []
         patch.append({'path': '/instance_info/image_source', 'op': 'add',
-                      'value': image_meta['id']})
+                      'value': image_meta.id})
         patch.append({'path': '/instance_info/root_gb', 'op': 'add',
                       'value': str(instance.root_gb)})
         patch.append({'path': '/instance_info/swap_mb', 'op': 'add',
                       'value': str(flavor['swap'])})
         patch.append({'path': '/instance_info/display_name',
                       'op': 'add', 'value': instance.display_name})
+        patch.append({'path': '/instance_info/vcpus', 'op': 'add',
+                      'value': str(instance.vcpus)})
+        patch.append({'path': '/instance_info/memory_mb', 'op': 'add',
+                      'value': str(instance.memory_mb)})
+        patch.append({'path': '/instance_info/local_gb', 'op': 'add',
+                      'value': str(self.node.properties.get('local_gb', 0))})
 
         if instance.ephemeral_gb:
             patch.append({'path': '/instance_info/ephemeral_gb',
