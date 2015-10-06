@@ -1104,6 +1104,7 @@ class TestArgsSerializer(test.NoDBTestCase):
         super(TestArgsSerializer, self).setUp()
         self.now = timeutils.utcnow()
         self.str_now = timeutils.strtime(at=self.now)
+        self.unicode_str = u'\xF0\x9F\x92\xA9'
 
     @base.serialize_args
     def _test_serialize_args(self, *args, **kwargs):
@@ -1112,13 +1113,14 @@ class TestArgsSerializer(test.NoDBTestCase):
             self.assertEqual(expected_args[index], val)
 
         expected_kwargs = {'a': 'untouched', 'b': self.str_now,
-                           'c': self.str_now}
+                           'c': self.str_now, 'exc_val': self.unicode_str}
         for key, val in six.iteritems(kwargs):
             self.assertEqual(expected_kwargs[key], val)
 
     def test_serialize_args(self):
         self._test_serialize_args('untouched', self.now, self.now,
-                                  a='untouched', b=self.now, c=self.now)
+                                  a='untouched', b=self.now, c=self.now,
+                                  exc_val=self.unicode_str)
 
 
 class TestRegistry(test.NoDBTestCase):
@@ -1176,12 +1178,12 @@ object_data = {
     'EC2InstanceMapping': '1.0-a4556eb5c5e94c045fe84f49cf71644f',
     'EC2SnapshotMapping': '1.0-47e7ddabe1af966dce0cfd0ed6cd7cd1',
     'EC2VolumeMapping': '1.0-5b713751d6f97bad620f3378a521020d',
-    'FixedIP': '1.13-b5818a33996228fc146f096d1403742c',
-    'FixedIPList': '1.13-87a39361c8f08f059004d6b15103cdfd',
+    'FixedIP': '1.14-53e1c10b539f1a82fe83b1af4720efae',
+    'FixedIPList': '1.14-87a39361c8f08f059004d6b15103cdfd',
     'Flavor': '1.1-b6bb7a730a79d720344accefafacf7ee',
     'FlavorList': '1.1-52b5928600e7ca973aa4fc1e46f3934c',
-    'FloatingIP': '1.9-52a67d52d85eb8b3f324a5b7935a335b',
-    'FloatingIPList': '1.10-7f2ba670714e1b7bab462ab3290f7159',
+    'FloatingIP': '1.10-52a67d52d85eb8b3f324a5b7935a335b',
+    'FloatingIPList': '1.11-7f2ba670714e1b7bab462ab3290f7159',
     'HostMapping': '1.0-1a3390a696792a552ab7bd31a77ba9ac',
     'HVSpec': '1.1-6b4f7c0f688cbd03e24142a44eb9010d',
     'ImageMeta': '1.7-642d1b2eb3e880a367f37d72dd76162d',
@@ -1241,8 +1243,8 @@ object_data = {
     'SecurityGroupList': '1.0-dc8bbea01ba09a2edb6e5233eae85cbc',
     'SecurityGroupRule': '1.1-ae1da17b79970012e8536f88cb3c6b29',
     'SecurityGroupRuleList': '1.1-674b323c9ccea02e93b1b40e7fd2091a',
-    'Service': '1.18-f1c6e82b5479f63e35970fe7625c3878',
-    'ServiceList': '1.16-b767102cba7cbed290e396114c3f86b3',
+    'Service': '1.19-8914320cbeb4ec29f252d72ce55d07e1',
+    'ServiceList': '1.17-b767102cba7cbed290e396114c3f86b3',
     'TaskLog': '1.0-78b0534366f29aa3eebb01860fbe18fe',
     'TaskLogList': '1.0-cc8cce1af8a283b9d28b55fcd682e777',
     'Tag': '1.1-8b8d7d5b48887651a0e01241672e2963',
@@ -1497,12 +1499,10 @@ class TestObjectVersions(test.NoDBTestCase):
                                     '1.2')
 
     def test_list_obj_make_compatible_when_no_objects(self):
-        """Test to make sure obj_make_compatible works with no 'objects'
-
-        If a List object ever has a version that did not contain the 'objects'
-        key, we need to make sure converting back to that version doesn't
-        cause backporting problems.
-        """
+        # Test to make sure obj_make_compatible works with no 'objects'
+        # If a List object ever has a version that did not contain the
+        # 'objects' key, we need to make sure converting back to that version
+        # doesn't cause backporting problems.
         @base.NovaObjectRegistry.register_if(False)
         class TestObj(base.NovaObject):
             VERSION = '1.1'

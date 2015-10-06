@@ -111,8 +111,8 @@ class _TestServiceObject(object):
     def test_create(self):
         self.mox.StubOutWithMock(db, 'service_create')
         db.service_create(self.context, {'host': 'fake-host',
-                                         'version': 1}).AndReturn(
-            fake_service)
+                                         'version': fake_service['version']}
+                          ).AndReturn(fake_service)
         self.mox.ReplayAll()
         service_obj = service.Service(context=self.context)
         service_obj.host = 'fake-host'
@@ -123,8 +123,8 @@ class _TestServiceObject(object):
     def test_recreate_fails(self):
         self.mox.StubOutWithMock(db, 'service_create')
         db.service_create(self.context, {'host': 'fake-host',
-                                         'version': 1}).AndReturn(
-            fake_service)
+                                         'version': fake_service['version']}
+                          ).AndReturn(fake_service)
         self.mox.ReplayAll()
         service_obj = service.Service(context=self.context)
         service_obj.host = 'fake-host'
@@ -133,9 +133,10 @@ class _TestServiceObject(object):
 
     def test_save(self):
         self.mox.StubOutWithMock(db, 'service_update')
-        db.service_update(self.context, 123, {'host': 'fake-host',
-                                              'version': 1}).AndReturn(
-            fake_service)
+        db.service_update(self.context, 123,
+                          {'host': 'fake-host',
+                           'version': fake_service['version']}
+                          ).AndReturn(fake_service)
         self.mox.ReplayAll()
         service_obj = service.Service(context=self.context)
         service_obj.id = 123
@@ -277,6 +278,24 @@ class _TestServiceObject(object):
         self.assertEqual(
             '1.5',
             fake_service_dict['compute_node']['nova_object.version'])
+
+    @mock.patch('nova.db.service_get_minimum_version')
+    def test_get_minimum_version_none(self, mock_get):
+        mock_get.return_value = None
+        self.assertEqual(0,
+                         objects.Service.get_minimum_version(self.context,
+                                                             'compute'))
+        mock_get.assert_called_once_with(self.context, 'compute',
+                                         use_slave=False)
+
+    @mock.patch('nova.db.service_get_minimum_version')
+    def test_get_minimum_version(self, mock_get):
+        mock_get.return_value = 123
+        self.assertEqual(123,
+                         objects.Service.get_minimum_version(self.context,
+                                                             'compute'))
+        mock_get.assert_called_once_with(self.context, 'compute',
+                                         use_slave=False)
 
 
 class TestServiceObject(test_objects._LocalTest,

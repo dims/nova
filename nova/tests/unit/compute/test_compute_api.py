@@ -1244,7 +1244,7 @@ class _ComputeAPIUnitTestMixIn(object):
     def test_revert_resize(self):
         self._test_revert_resize()
 
-    def test_revert_resize_concurent_fail(self):
+    def test_revert_resize_concurrent_fail(self):
         params = dict(vm_state=vm_states.RESIZED)
         fake_inst = self._create_instance_obj(params=params)
         fake_mig = objects.Migration._from_db_object(
@@ -2536,8 +2536,31 @@ class _ComputeAPIUnitTestMixIn(object):
     @mock.patch('nova.objects.Quotas.reserve')
     @mock.patch('nova.objects.Instance.save')
     @mock.patch('nova.objects.InstanceAction.action_start')
-    def test_restore(self, action_start, instance_save, quota_reserve,
-                     quota_commit):
+    def test_restore_by_admin(self, action_start, instance_save,
+                              quota_reserve, quota_commit):
+        admin_context = context.RequestContext('admin_user',
+                                               'admin_project',
+                                               True)
+        instance = self._create_instance_obj()
+        instance.vm_state = vm_states.SOFT_DELETED
+        instance.task_state = None
+        instance.save()
+        with mock.patch.object(self.compute_api, 'compute_rpcapi') as rpc:
+            self.compute_api.restore(admin_context, instance)
+            rpc.restore_instance.assert_called_once_with(admin_context,
+                                                         instance)
+        self.assertEqual(instance.task_state, task_states.RESTORING)
+        self.assertEqual(1, quota_commit.call_count)
+        quota_reserve.assert_called_once_with(instances=1,
+            cores=instance.flavor.vcpus, ram=instance.flavor.memory_mb,
+            project_id=instance.project_id, user_id=instance.user_id)
+
+    @mock.patch('nova.objects.Quotas.commit')
+    @mock.patch('nova.objects.Quotas.reserve')
+    @mock.patch('nova.objects.Instance.save')
+    @mock.patch('nova.objects.InstanceAction.action_start')
+    def test_restore_by_instance_owner(self, action_start, instance_save,
+                                       quota_reserve, quota_commit):
         instance = self._create_instance_obj()
         instance.vm_state = vm_states.SOFT_DELETED
         instance.task_state = None
@@ -2546,8 +2569,12 @@ class _ComputeAPIUnitTestMixIn(object):
             self.compute_api.restore(self.context, instance)
             rpc.restore_instance.assert_called_once_with(self.context,
                                                          instance)
+        self.assertEqual(instance.project_id, self.context.project_id)
         self.assertEqual(instance.task_state, task_states.RESTORING)
         self.assertEqual(1, quota_commit.call_count)
+        quota_reserve.assert_called_once_with(instances=1,
+            cores=instance.flavor.vcpus, ram=instance.flavor.memory_mb,
+            project_id=instance.project_id, user_id=instance.user_id)
 
     def test_external_instance_event(self):
         instances = [
@@ -2937,6 +2964,34 @@ class _ComputeAPIUnitTestMixIn(object):
         api.get_all(self.context, search_opts={'tenant_id': 'foo'})
         filters = mock_get.call_args_list[0][0][1]
         self.assertEqual({'project_id': 'foo'}, filters)
+
+    def test_populate_instance_names_host_name(self):
+        params = dict(display_name="vm1")
+        instance = self._create_instance_obj(params=params)
+        self.compute_api._populate_instance_names(instance, 1)
+        self.assertEqual('vm1', instance.hostname)
+
+    def test_populate_instance_names_host_name_is_empty(self):
+        params = dict(display_name=u'\u865a\u62df\u673a\u662f\u4e2d\u6587')
+        instance = self._create_instance_obj(params=params)
+        self.compute_api._populate_instance_names(instance, 1)
+        self.assertEqual('Server-%s' % instance.uuid, instance.hostname)
+
+    def test_populate_instance_names_host_name_multi(self):
+        params = dict(display_name="vm")
+        instance = self._create_instance_obj(params=params)
+        with mock.patch.object(instance, 'save'):
+            self.compute_api._apply_instance_name_template(self.context,
+                                                           instance, 1)
+            self.assertEqual('vm-2', instance.hostname)
+
+    def test_populate_instance_names_host_name_is_empty_multi(self):
+        params = dict(display_name=u'\u865a\u62df\u673a\u662f\u4e2d\u6587')
+        instance = self._create_instance_obj(params=params)
+        with mock.patch.object(instance, 'save'):
+            self.compute_api._apply_instance_name_template(self.context,
+                                                           instance, 1)
+            self.assertEqual('Server-%s' % instance.uuid, instance.hostname)
 
 
 class ComputeAPIUnitTestCase(_ComputeAPIUnitTestMixIn, test.NoDBTestCase):

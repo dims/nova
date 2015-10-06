@@ -94,6 +94,40 @@ class GenericUtilsTestCase(test.NoDBTestCase):
         hostname = "<}\x1fh\x10e\x08l\x02l\x05o\x12!{>"
         self.assertEqual("hello", utils.sanitize_hostname(hostname))
 
+    def test_hostname_has_default(self):
+        hostname = u"\u7684hello"
+        defaultname = "Server-1"
+        self.assertEqual("hello", utils.sanitize_hostname(hostname,
+                                                          defaultname))
+
+    def test_hostname_empty_has_default(self):
+        hostname = u"\u7684"
+        defaultname = "Server-1"
+        self.assertEqual(defaultname, utils.sanitize_hostname(hostname,
+                                                              defaultname))
+
+    def test_hostname_empty_has_default_too_long(self):
+        hostname = u"\u7684"
+        defaultname = "a" * 64
+        self.assertEqual("a" * 63, utils.sanitize_hostname(hostname,
+                                                           defaultname))
+
+    def test_hostname_empty_no_default(self):
+        hostname = u"\u7684"
+        self.assertEqual("", utils.sanitize_hostname(hostname))
+
+    def test_hostname_empty_minus_period(self):
+        hostname = "---..."
+        self.assertEqual("", utils.sanitize_hostname(hostname))
+
+    def test_hostname_with_space(self):
+        hostname = " a b c "
+        self.assertEqual("a-b-c", utils.sanitize_hostname(hostname))
+
+    def test_hostname_too_long(self):
+        hostname = "a" * 64
+        self.assertEqual(63, len(utils.sanitize_hostname(hostname)))
+
     def test_generate_password(self):
         password = utils.generate_password()
         self.assertTrue([c for c in password if c in '0123456789'])
@@ -778,8 +812,26 @@ class MetadataToDictTestCase(test.NoDBTestCase):
                  {'key': 'foo2', 'value': 'baz'}]),
                          {'foo1': 'bar', 'foo2': 'baz'})
 
+    def test_metadata_to_dict_with_include_deleted(self):
+        metadata = [{'key': 'foo1', 'value': 'bar', 'deleted': 1442875429,
+                     'other': 'stuff'},
+                    {'key': 'foo2', 'value': 'baz', 'deleted': 0,
+                     'other': 'stuff2'}]
+        self.assertEqual({'foo1': 'bar', 'foo2': 'baz'},
+                         utils.metadata_to_dict(metadata,
+                                                include_deleted=True))
+        self.assertEqual({'foo2': 'baz'},
+                         utils.metadata_to_dict(metadata,
+                                                include_deleted=False))
+        # verify correct default behavior
+        self.assertEqual(utils.metadata_to_dict(metadata),
+                         utils.metadata_to_dict(metadata,
+                                                include_deleted=False))
+
     def test_metadata_to_dict_empty(self):
-        self.assertEqual(utils.metadata_to_dict([]), {})
+        self.assertEqual({}, utils.metadata_to_dict([]))
+        self.assertEqual({}, utils.metadata_to_dict([], include_deleted=True))
+        self.assertEqual({}, utils.metadata_to_dict([], include_deleted=False))
 
     def test_dict_to_metadata(self):
         def sort_key(adict):

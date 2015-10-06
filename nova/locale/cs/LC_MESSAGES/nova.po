@@ -7,19 +7,22 @@
 # FIRST AUTHOR <EMAIL@ADDRESS>, 2011
 # Jaroslav Lichtblau <dragonlord@seznam.cz>, 2014
 # Zbyněk Schwarz <zbynek.schwarz@gmail.com>, 2013,2015
+# OpenStack Infra <zanata@openstack.org>, 2015. #zanata
+# Zbyněk Schwarz <zbynek.schwarz@gmail.com>, 2015. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version:  nova\n"
+"Project-Id-Version: nova 13.0.0.dev302\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2015-09-08 06:23+0000\n"
-"PO-Revision-Date: 2015-09-07 07:57+0000\n"
+"POT-Creation-Date: 2015-09-29 06:31+0000\n"
+"PO-Revision-Date: 2015-09-21 08:43+0000\n"
 "Last-Translator: Zbyněk Schwarz <zbynek.schwarz@gmail.com>\n"
+"Language: cs\n"
 "Language-Team: Czech (http://www.transifex.com/openstack/nova/language/cs/)\n"
 "Plural-Forms: nplurals=3; plural=(n==1) ? 0 : (n>=2 && n<=4) ? 1 : 2\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Generated-By: Babel 2.0\n"
+"Generated-By: Babel 2.1.1\n"
 
 #, python-format
 msgid "%(address)s is not a valid IP v4/6 address."
@@ -833,10 +836,6 @@ msgid ""
 msgstr ""
 "Konfigurace vyžaduje konkrétní model procesu, ale současný hypervizor "
 "libvirt '%s' nepodporuje výběr modelů procesoru"
-
-#, python-format
-msgid "Conflict updating instance %(instance_uuid)s"
-msgstr "Konflikt při aktualizaci instance %(instance_uuid)s"
 
 #, python-format
 msgid ""
@@ -2254,6 +2253,10 @@ msgstr "Neplatná položka: '%s'; Očekáváno dict"
 #, python-format
 msgid "Invalid entry: '%s'; Expecting list or dict"
 msgstr "Neplatná položka: '%s'; Očekáváno list nebo dict"
+
+#, python-format
+msgid "Invalid event name %s"
+msgstr "Neplatný název události %s"
 
 #, python-format
 msgid "Invalid event status `%s'"
@@ -4560,14 +4563,6 @@ msgstr ""
 msgid "Unexpected aggregate action %s"
 msgstr "Neočekávaná činnost agregátu %s"
 
-#, python-format
-msgid ""
-"Unexpected sysinfo_serial setting '%(actual)s'. Permitted values are "
-"%(expect)s'"
-msgstr ""
-"Neočekávané nastavení sysinfo_serial '%(actual)s'. Povolené hodnoty jsou "
-"'%(expect)s'"
-
 msgid "Unexpected type adding stats"
 msgstr "Neočekávaný typ při přidávání statistik"
 
@@ -5078,9 +5073,6 @@ msgstr "Objekt createImage vyžaduje vlastnost name"
 msgid "destination is %(target_cell)s but routing_path is %(routing_path)s"
 msgstr "cíl je %(target_cell)s ale cesta směrování je %(routing_path)s"
 
-msgid "destination same as source!"
-msgstr "cíl stejný jako zdroj!"
-
 msgid "disk"
 msgstr "disk"
 
@@ -5283,6 +5275,16 @@ msgstr "uzel"
 #, python-format
 msgid "not able to execute ssh command: %s"
 msgstr "nelze spustit příkaz ssh: %s"
+
+msgid ""
+"nova-idmapshift is a tool that properly sets the ownership of a filesystem "
+"for use with linux user namespaces.  This tool can only be used with linux "
+"lxc containers.  See the man page for details."
+msgstr ""
+"nova-idmapshift je nástroj pro správné nastavení vlastnictví souborového "
+"systému v rámci jmenných prostorů uživatelů linux. Tento nástroj lze použít "
+"pouze u kontejnerů lxc v linux. Pro další informace si prohlédněte stránky "
+"uživatelské příručky."
 
 msgid "onSharedStorage must be specified."
 msgstr "onSharedStorage musí být zadáno."

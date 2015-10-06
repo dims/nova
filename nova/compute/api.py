@@ -114,8 +114,15 @@ compute_opts = [
                default=3,
                help='Maximum number of devices that will result '
                     'in a local image being created on the hypervisor node. '
-                    'Setting this to 0 means nova will allow only '
-                    'boot from volume. A negative number means unlimited.'),
+                    'A negative number means unlimited. Setting '
+                    'max_local_block_devices to 0 means that any request that '
+                    'attempts to create a local disk will fail. This option '
+                    'is meant to limit the number of local discs (so root '
+                    'local disc that is the result of --image being used, and '
+                    'any other ephemeral and swap disks). 0 does not mean '
+                    'that images will be automatically converted to volumes '
+                    'and boot instances from volumes - it just means that all '
+                    'requests that attempt to create a local disk will fail.'),
 ]
 
 ephemeral_storage_encryption_group = cfg.OptGroup(
@@ -303,11 +310,6 @@ class API(base.Base):
             self._cell_type = cells_opts.get_cell_type()
             return self._cell_type
 
-    def _cell_read_only(self, cell_name):
-        """Is the target cell in a read-only mode?"""
-        # FIXME(comstud): Add support for this.
-        return False
-
     def _validate_cell(self, instance, method):
         if self.cell_type != 'api':
             return
@@ -315,12 +317,6 @@ class API(base.Base):
         if not cell_name:
             raise exception.InstanceUnknownCell(
                     instance_uuid=instance.uuid)
-        if self._cell_read_only(cell_name):
-            raise exception.InstanceInvalidState(
-                    attr="vm_state",
-                    instance_uuid=instance.uuid,
-                    state="temporary_readonly",
-                    method=method)
 
     def _record_action_start(self, context, instance, action):
         objects.InstanceAction.action_start(context, instance.uuid,
@@ -386,7 +382,7 @@ class API(base.Base):
         return headroom
 
     def _check_num_instances_quota(self, context, instance_type, min_count,
-                                   max_count):
+                                   max_count, project_id=None, user_id=None):
         """Enforce quota limits on number of instances created."""
 
         # Determine requested cores and ram
@@ -396,9 +392,10 @@ class API(base.Base):
 
         # Check the quota
         try:
-            quotas = objects.Quotas(context)
+            quotas = objects.Quotas(context=context)
             quotas.reserve(instances=max_count,
-                           cores=req_cores, ram=req_ram)
+                           cores=req_cores, ram=req_ram,
+                           project_id=project_id, user_id=user_id)
         except exception.OverQuota as exc:
             # OK, we exceeded quota; let's figure out why...
             quotas = exc.kwargs['quotas']
@@ -628,6 +625,7 @@ class API(base.Base):
             'name': instance.display_name,
             'count': index + 1,
         }
+        original_name = instance.display_name
         try:
             new_name = (CONF.multi_instance_display_name_template %
                         params)
@@ -637,7 +635,10 @@ class API(base.Base):
             new_name = instance.display_name
         instance.display_name = new_name
         if not instance.get('hostname', None):
-            instance.hostname = utils.sanitize_hostname(new_name)
+            if utils.sanitize_hostname(original_name) == "":
+                instance.hostname = self._default_host_name(instance.uuid)
+            else:
+                instance.hostname = utils.sanitize_hostname(new_name)
         instance.save()
         return instance
 
@@ -751,8 +752,10 @@ class API(base.Base):
                                      image_defined_bdms)
 
         if image_mapping:
-            image_defined_bdms += self._prepare_image_mapping(
-                instance_type, image_mapping)
+            image_mapping = self._prepare_image_mapping(instance_type,
+                                                        image_mapping)
+            image_defined_bdms = self._merge_bdms_lists(
+                image_mapping, image_defined_bdms)
 
         return image_defined_bdms
 
@@ -773,12 +776,18 @@ class API(base.Base):
 
         return flavor_defined_bdms
 
-    def _merge_with_image_bdms(self, block_device_mapping, image_mappings):
-        """Override any block devices from the image by device name"""
-        device_names = set(bdm['device_name'] for bdm in block_device_mapping
+    def _merge_bdms_lists(self, overrideable_mappings, overrider_mappings):
+        """Override any block devices from the first list by device name
+
+        :param overridable_mappings: list which items are overriden
+        :param overrider_mappings: list which items override
+
+        :returns: A merged list of bdms
+        """
+        device_names = set(bdm['device_name'] for bdm in overrider_mappings
                            if bdm['device_name'])
-        return (block_device_mapping +
-                [bdm for bdm in image_mappings
+        return (overrider_mappings +
+                [bdm for bdm in overrideable_mappings
                  if bdm['device_name'] not in device_names])
 
     def _check_and_transform_bdm(self, context, base_options, instance_type,
@@ -825,8 +834,8 @@ class API(base.Base):
             block_device_mapping = (
                 filter(not_image_and_root_bdm, block_device_mapping))
 
-        block_device_mapping = self._merge_with_image_bdms(
-            block_device_mapping, image_defined_bdms)
+        block_device_mapping = self._merge_bdms_lists(
+            image_defined_bdms, block_device_mapping)
 
         if min_count > 1 or max_count > 1:
             if any(map(lambda bdm: bdm['source_type'] == 'volume',
@@ -1383,10 +1392,15 @@ class API(base.Base):
             # Otherwise, it will be built after the template based
             # display_name.
             hostname = display_name
-            instance.hostname = utils.sanitize_hostname(hostname)
+            default_hostname = self._default_host_name(instance.uuid)
+            instance.hostname = utils.sanitize_hostname(hostname,
+                                                        default_hostname)
 
     def _default_display_name(self, instance_uuid):
         return "Server %s" % instance_uuid
+
+    def _default_host_name(self, instance_uuid):
+        return "Server-%s" % instance_uuid
 
     def _populate_instance_for_create(self, context, instance, image,
                                       index, security_groups, instance_type):
@@ -1771,7 +1785,7 @@ class API(base.Base):
                 instance_vcpus, instance_memory_mb = get_inst_attrs(migration,
                                                                     instance)
 
-        quotas = objects.Quotas(context)
+        quotas = objects.Quotas(context=context)
         quotas.reserve(project_id=project_id,
                        user_id=user_id,
                        instances=-1,
@@ -1916,8 +1930,10 @@ class API(base.Base):
         """Restore a previously deleted (but not reclaimed) instance."""
         # Reserve quotas
         flavor = instance.get_flavor()
+        project_id, user_id = quotas_obj.ids_from_instance(context, instance)
         num_instances, quotas = self._check_num_instances_quota(
-                context, flavor, 1, 1)
+                context, flavor, 1, 1,
+                project_id=project_id, user_id=user_id)
 
         self._record_action_start(context, instance, instance_actions.RESTORE)
 
@@ -2183,10 +2199,8 @@ class API(base.Base):
         props_copy = dict(extra_properties, backup_type=backup_type)
 
         if self.is_volume_backed_instance(context, instance):
-            # TODO(flwang): The log level will be changed to INFO after
-            # string freeze (Liberty).
-            LOG.debug("It's not supported to backup volume backed instance.",
-                      context=context, instance=instance)
+            LOG.info(_LI("It's not supported to backup volume backed "
+                         "instance."), context=context, instance=instance)
             raise exception.InvalidRequest()
         else:
             image_meta = self._create_image(context, instance,
@@ -3888,7 +3902,7 @@ class SecurityGroupAPI(base.Base, security_group_base.SecurityGroupBase):
         self.db.security_group_ensure_default(context)
 
     def create_security_group(self, context, name, description):
-        quotas = objects.Quotas(context)
+        quotas = objects.Quotas(context=context)
         try:
             quotas.reserve(security_groups=1)
         except exception.OverQuota:

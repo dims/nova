@@ -480,6 +480,11 @@ class DestinationHypervisorTooOld(Invalid):
                 "has been provided.")
 
 
+class ServiceTooOld(Invalid):
+    msg_fmt = _("This service is older than the minimum version "
+                "of the rest of the deployment. Unable to continue. ")
+
+
 class DestinationDiskExists(Invalid):
     msg_fmt = _("The supplied disk path (%(path)s) already exists, "
                 "it is expected not to exist.")
@@ -1550,10 +1555,6 @@ class InstanceFaultRollback(NovaException):
         message = _("Instance rollback performed due to: %s")
         self.inner_exception = inner_exception
         super(InstanceFaultRollback, self).__init__(message % inner_exception)
-
-
-class InstanceUpdateConflict(NovaException):
-    msg_fmt = _('Conflict updating instance %(instance_uuid)s')
 
 
 class OrphanedObjectError(NovaException):

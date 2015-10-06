@@ -92,6 +92,7 @@ from nova.virt.libvirt import firewall
 from nova.virt.libvirt import guest as libvirt_guest
 from nova.virt.libvirt import host
 from nova.virt.libvirt import imagebackend
+from nova.virt.libvirt.storage import dmcrypt
 from nova.virt.libvirt.storage import lvm
 from nova.virt.libvirt.storage import rbd_utils
 from nova.virt.libvirt import utils as libvirt_utils
@@ -570,11 +571,14 @@ class LibvirtConnTestCase(test.NoDBTestCase):
     def test_driver_capabilities(self):
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         self.assertTrue(drvr.capabilities['has_imagecache'],
-                        'Driver capabilities for \'has_imagecache\''
+                        'Driver capabilities for \'has_imagecache\' '
                         'is invalid')
         self.assertTrue(drvr.capabilities['supports_recreate'],
-                        'Driver capabilities for \'supports_recreate\''
+                        'Driver capabilities for \'supports_recreate\' '
                         'is invalid')
+        self.assertFalse(drvr.capabilities['supports_migrate_to_same_host'],
+                         'Driver capabilities for '
+                         '\'supports_migrate_to_same_host\' is invalid')
 
     def create_fake_libvirt_mock(self, **kwargs):
         """Defining mocks for LibvirtDriver(libvirt is not used)."""
@@ -2900,47 +2904,94 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             drvr._get_guest_config, instance_ref, [],
             image_meta, disk_info)
 
-    @mock.patch.object(host.Host, "get_domain")
-    def test_get_serial_ports_from_instance(self, mock_get_domain):
-        i = self._test_get_serial_ports_from_instance(None,
-                                                      mock_get_domain)
+    @mock.patch('os.path.getsize', return_value=0)  # size doesn't matter
+    @mock.patch('nova.virt.libvirt.storage.lvm.get_volume_size',
+                return_value='fake-size')
+    def test_detach_encrypted_volumes(self, mock_getsize,
+                                      mock_get_volume_size):
+        """Test that unencrypted volumes are not disconnected with dmcrypt."""
+        instance = objects.Instance(**self.test_instance)
+        xml = """
+              <domain type='kvm'>
+                  <devices>
+                      <disk type='file'>
+                          <driver name='fake-driver' type='fake-type' />
+                          <source file='filename'/>
+                          <target dev='vdc' bus='virtio'/>
+                      </disk>
+                      <disk type='block' device='disk'>
+                          <driver name='fake-driver' type='fake-type' />
+                          <source dev='/dev/mapper/disk'/>
+                          <target dev='vda'/>
+                      </disk>
+                      <disk type='block' device='disk'>
+                          <driver name='fake-driver' type='fake-type' />
+                          <source dev='/dev/mapper/swap'/>
+                          <target dev='vdb'/>
+                      </disk>
+                  </devices>
+              </domain>
+              """
+        dom = FakeVirtDomain(fake_xml=xml)
+        instance.ephemeral_key_uuid = 'fake-id'  # encrypted
+
+        conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+
+        @mock.patch.object(dmcrypt, 'delete_volume')
+        @mock.patch.object(conn._host, 'get_domain', return_value=dom)
+        def detach_encrypted_volumes(block_device_info, mock_get_domain,
+                                     mock_delete_volume):
+            conn._detach_encrypted_volumes(instance, block_device_info)
+
+            mock_get_domain.assert_called_once_with(instance)
+            self.assertFalse(mock_delete_volume.called)
+
+        block_device_info = {'root_device_name': '/dev/vda',
+                             'ephemerals': [],
+                             'block_device_mapping': []}
+
+        detach_encrypted_volumes(block_device_info)
+
+    @mock.patch.object(libvirt_guest.Guest, "get_xml_desc")
+    def test_get_serial_ports_from_guest(self, mock_get_xml_desc):
+        i = self._test_get_serial_ports_from_guest(None,
+                                                   mock_get_xml_desc)
         self.assertEqual([
             ('127.0.0.1', 100),
             ('127.0.0.1', 101),
             ('127.0.0.2', 100),
             ('127.0.0.2', 101)], list(i))
 
-    @mock.patch.object(host.Host, "get_domain")
-    def test_get_serial_ports_from_instance_bind_only(self, mock_get_domain):
-        i = self._test_get_serial_ports_from_instance('bind',
-                                                      mock_get_domain)
+    @mock.patch.object(libvirt_guest.Guest, "get_xml_desc")
+    def test_get_serial_ports_from_guest_bind_only(self, mock_get_xml_desc):
+        i = self._test_get_serial_ports_from_guest('bind',
+                                                   mock_get_xml_desc)
         self.assertEqual([
             ('127.0.0.1', 101),
             ('127.0.0.2', 100)], list(i))
 
-    @mock.patch.object(host.Host, "get_domain")
-    def test_get_serial_ports_from_instance_connect_only(self,
-                                                         mock_get_domain):
-        i = self._test_get_serial_ports_from_instance('connect',
-                                                      mock_get_domain)
+    @mock.patch.object(libvirt_guest.Guest, "get_xml_desc")
+    def test_get_serial_ports_from_guest_connect_only(self,
+                                                      mock_get_xml_desc):
+        i = self._test_get_serial_ports_from_guest('connect',
+                                                   mock_get_xml_desc)
         self.assertEqual([
             ('127.0.0.1', 100),
             ('127.0.0.2', 101)], list(i))
 
-    @mock.patch.object(host.Host, "get_domain")
-    def test_get_serial_ports_from_instance_on_s390(self, mock_get_domain):
-
-        i = self._test_get_serial_ports_from_instance(None,
-                                                      mock_get_domain,
-                                                      'console')
+    @mock.patch.object(libvirt_guest.Guest, "get_xml_desc")
+    def test_get_serial_ports_from_guest_on_s390(self, mock_get_xml_desc):
+        i = self._test_get_serial_ports_from_guest(None,
+                                                   mock_get_xml_desc,
+                                                   'console')
         self.assertEqual([
             ('127.0.0.1', 100),
             ('127.0.0.1', 101),
             ('127.0.0.2', 100),
             ('127.0.0.2', 101)], list(i))
 
-    def _test_get_serial_ports_from_instance(self, mode, mock_get_domain,
-                                             dev_name='serial'):
+    def _test_get_serial_ports_from_guest(self, mode, mock_get_xml_desc,
+                                          dev_name='serial'):
         xml = """
         <domain type='kvm'>
           <devices>
@@ -2959,14 +3010,11 @@ class LibvirtConnTestCase(test.NoDBTestCase):
           </devices>
         </domain>""" % {'dev_name': dev_name}
 
-        dom = mock.MagicMock()
-        dom.XMLDesc.return_value = xml
-        mock_get_domain.return_value = dom
+        mock_get_xml_desc.return_value = xml
 
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
-        instance = objects.Instance(**self.test_instance)
-        return drvr._get_serial_ports_from_instance(
-            instance, mode=mode)
+        guest = libvirt_guest.Guest(FakeVirtDomain())
+        return drvr._get_serial_ports_from_guest(guest, mode=mode)
 
     def test_get_guest_config_with_type_xen(self):
         self.flags(enabled=True, group='vnc')
@@ -3913,14 +3961,6 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             mock_open.side_effect = fake_open
 
             self._test_get_guest_config_sysinfo_serial(theuuid)
-
-    def test_get_guest_config_sysinfo_serial_invalid(self):
-        self.flags(sysinfo_serial="invalid", group="libvirt")
-
-        self.assertRaises(exception.NovaException,
-                          libvirt_driver.LibvirtDriver,
-                          fake.FakeVirtAPI(),
-                          True)
 
     def _create_fake_service_compute(self):
         service_info = {
@@ -5928,6 +5968,38 @@ class LibvirtConnTestCase(test.NoDBTestCase):
                           drvr.check_can_live_migrate_source,
                           self.context, instance, dest_check_data)
 
+    @mock.patch('nova.virt.libvirt.driver.LibvirtDriver.'
+                '_assert_dest_node_has_enough_disk')
+    @mock.patch('nova.virt.libvirt.driver.LibvirtDriver.'
+                '_has_local_disk')
+    @mock.patch('nova.virt.libvirt.driver.LibvirtDriver.'
+                '_is_booted_from_volume')
+    @mock.patch('nova.virt.libvirt.driver.LibvirtDriver.'
+                'get_instance_disk_info')
+    @mock.patch('nova.virt.libvirt.driver.LibvirtDriver.'
+                '_is_shared_block_storage')
+    @mock.patch('nova.virt.libvirt.driver.LibvirtDriver.'
+                '_check_shared_storage_test_file')
+    def test_check_can_live_migrate_source_block_migration_with_bdm(
+            self, mock_check, mock_shared_block, mock_get_bdi,
+            mock_booted_from_volume, mock_has_local, mock_enough):
+
+        mock_check.return_value = False
+        mock_shared_block.return_value = False
+        bdi = {'block_device_mapping': ['bdm']}
+        instance = objects.Instance(**self.test_instance)
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        dest_check_data = {'filename': 'file',
+                           'image_type': 'default',
+                           'block_migration': True,
+                           'disk_over_commit': False,
+                           'disk_available_mb': 100}
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        self.assertRaises(exception.MigrationPreCheckError,
+                          drvr.check_can_live_migrate_source,
+                          self.context, instance, dest_check_data,
+                          block_device_info=bdi)
+
     def _is_shared_block_storage_test_create_mocks(self, disks):
         # Test data
         instance_xml = ("<domain type='kvm'><name>instance-0000000a</name>"
@@ -7177,8 +7249,9 @@ class LibvirtConnTestCase(test.NoDBTestCase):
                                    'ramdisk_id': 'fake_ramdisk_id',
                                    'project_id': 'fake-project'})
         instance = objects.Instance(**self.test_instance)
-        conn._create_images_and_backing(self.context, instance,
-                                        '/fake/instance/dir', disk_info)
+        with mock.patch.object(imagebackend.Image, 'get_disk_size'):
+            conn._create_images_and_backing(self.context, instance,
+                                            '/fake/instance/dir', disk_info)
         self.assertFalse(mock_fetch_image.called)
 
     def test_create_images_and_backing_ephemeral_gets_created(self):
@@ -7203,9 +7276,10 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             mock.patch.object(drvr, '_fetch_instance_kernel_ramdisk'),
             mock.patch.object(libvirt_driver.libvirt_utils, 'fetch_image'),
             mock.patch.object(drvr, '_create_ephemeral'),
-            mock.patch.object(imagebackend.Image, 'verify_base_size')
+            mock.patch.object(imagebackend.Image, 'verify_base_size'),
+            mock.patch.object(imagebackend.Image, 'get_disk_size')
         ) as (fetch_kernel_ramdisk_mock, fetch_image_mock,
-                create_ephemeral_mock, verify_base_size_mock):
+                create_ephemeral_mock, verify_base_size_mock, disk_size_mock):
             drvr._create_images_and_backing(self.context, instance,
                                             "/fake/instance/dir",
                                             disk_info)
@@ -7524,34 +7598,6 @@ class LibvirtConnTestCase(test.NoDBTestCase):
                 [mock.call(self.context, instance, mock.ANY, {},
                            fallback_from_host=instance.host)])
             self.assertIsInstance(res, dict)
-
-    def test_pre_live_migration_block_migrate_fails(self):
-        bdms = [{
-            'connection_info': {
-                'serial': '12345',
-                u'data': {
-                    'device_path':
-                    u'/dev/disk/by-path/ip-1.2.3.4:3260-iqn.abc.12345.t-lun-X'
-                }
-            },
-            'mount_device': '/dev/sda'}]
-
-        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
-        instance = objects.Instance(**self.test_instance)
-
-        with contextlib.nested(
-            mock.patch.object(drvr, '_create_images_and_backing'),
-            mock.patch.object(drvr, 'ensure_filtering_rules_for_instance'),
-            mock.patch.object(drvr, 'plug_vifs'),
-            mock.patch.object(drvr, '_connect_volume'),
-            mock.patch.object(driver, 'block_device_info_get_mapping',
-                              return_value=bdms)):
-            disk_info_json = jsonutils.dumps({})
-            self.assertRaises(exception.MigrationError,
-                              drvr.pre_live_migration,
-                              self.context, instance, block_device_info=None,
-                              network_info=[], disk_info=disk_info_json,
-                              migrate_data={})
 
     def test_get_instance_disk_info_works_correctly(self):
         # Test data
@@ -8099,6 +8145,9 @@ class LibvirtConnTestCase(test.NoDBTestCase):
                                  size, *args, **kwargs):
                     pass
 
+                def resize_image(self, size):
+                    pass
+
                 def cache(self, fetch_func, filename, size=None,
                           *args, **kwargs):
                     gotFiles.append({'filename': filename,
@@ -8183,6 +8232,9 @@ class LibvirtConnTestCase(test.NoDBTestCase):
 
                 def create_image(self, prepare_template, base,
                                  size, *args, **kwargs):
+                    pass
+
+                def resize_image(self, size):
                     pass
 
                 def cache(self, fetch_func, filename, size=None,
@@ -8351,7 +8403,8 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             mock.patch.object(utils, 'execute'),
             mock.patch.object(drvr, 'get_info'),
             mock.patch.object(drvr, '_create_domain_and_network'),
-            mock.patch.object(imagebackend.Image, 'verify_base_size')):
+            mock.patch.object(imagebackend.Image, 'verify_base_size'),
+            mock.patch.object(imagebackend.Image, 'get_disk_size')):
             self.assertRaises(exception.InvalidBDMFormat, drvr._create_image,
                               context, instance, disk_info['mapping'],
                               block_device_info=block_device_info)
@@ -8998,6 +9051,37 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         self.assertFalse(drvr._image_api.get.called)
         mock_ensure_tree.assert_called_once_with('/foo')
 
+    def test_suspend(self):
+        guest = libvirt_guest.Guest(FakeVirtDomain(id=1))
+        dom = guest._domain
+
+        instance = objects.Instance(**self.test_instance)
+        instance.ephemeral_key_uuid = None
+
+        conn = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+
+        @mock.patch.object(dmcrypt, 'delete_volume')
+        @mock.patch.object(conn, '_get_instance_disk_info', return_value=[])
+        @mock.patch.object(conn, '_detach_sriov_ports')
+        @mock.patch.object(conn, '_detach_pci_devices')
+        @mock.patch.object(pci_manager, 'get_instance_pci_devs',
+                           return_value='pci devs')
+        @mock.patch.object(conn._host, 'get_guest', return_value=guest)
+        def suspend(mock_get_guest, mock_get_instance_pci_devs,
+                    mock_detach_pci_devices, mock_detach_sriov_ports,
+                    mock_get_instance_disk_info, mock_delete_volume):
+            mock_managedSave = mock.Mock()
+            dom.managedSave = mock_managedSave
+
+            conn.suspend(self.context, instance)
+
+            mock_managedSave.assert_called_once_with(0)
+            self.assertEqual(mock_get_instance_disk_info.called, False)
+            mock_delete_volume.assert_has_calls([mock.call(disk['path'])
+                for disk in mock_get_instance_disk_info.return_value], False)
+
+        suspend()
+
     @mock.patch.object(time, 'sleep')
     @mock.patch.object(libvirt_driver.LibvirtDriver, '_create_domain')
     @mock.patch.object(host.Host, 'get_domain')
@@ -9565,6 +9649,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             cpu.vendor = "AMD"
             cpu.arch = arch.X86_64
 
+            cpu.cells = 1
             cpu.cores = 2
             cpu.threads = 1
             cpu.sockets = 4
@@ -9597,7 +9682,8 @@ class LibvirtConnTestCase(test.NoDBTestCase):
                 "features": set(["extapic", "3dnow"]),
                 "model": "Opteron_G4",
                 "arch": arch.X86_64,
-                "topology": {"cores": 2, "threads": 1, "sockets": 4}}
+                "topology": {"cells": 1, "cores": 2, "threads": 1,
+                             "sockets": 4}}
         got = drvr._get_cpu_info()
         self.assertEqual(want, got)
 
@@ -11754,12 +11840,13 @@ class LibvirtConnTestCase(test.NoDBTestCase):
                               drvr.cleanup, 'ctxt', fake_inst, 'netinfo')
             unplug.assert_called_once_with(fake_inst, 'netinfo', True)
 
-    @mock.patch('nova.virt.driver.block_device_info_get_mapping')
-    @mock.patch('nova.virt.libvirt.driver.LibvirtDriver.'
-                '_get_serial_ports_from_instance')
-    @mock.patch('nova.virt.libvirt.driver.LibvirtDriver._undefine_domain')
+    @mock.patch.object(driver, 'block_device_info_get_mapping')
+    @mock.patch.object(host.Host, "get_guest")
+    @mock.patch.object(libvirt_driver.LibvirtDriver,
+                       '_get_serial_ports_from_guest')
+    @mock.patch.object(libvirt_driver.LibvirtDriver, '_undefine_domain')
     def test_cleanup_serial_console_enabled(
-            self, undefine, get_ports,
+            self, undefine, get_ports, get_guest,
             block_device_info_get_mapping):
         self.flags(enabled="True", group='serial_console')
         instance = 'i1'
@@ -11767,6 +11854,8 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         bdm_info = {}
         firewall_driver = mock.MagicMock()
 
+        guest = mock.Mock(spec=libvirt_guest.Guest)
+        get_guest.return_value = guest
         get_ports.return_value = iter([('127.0.0.1', 10000)])
         block_device_info_get_mapping.return_value = ()
 
@@ -11783,18 +11872,17 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             block_device_info=bdm_info,
             destroy_disks=False, destroy_vifs=False)
 
-        get_ports.assert_called_once_with(instance)
+        get_ports.assert_called_once_with(guest)
         undefine.assert_called_once_with(instance)
         firewall_driver.unfilter_instance.assert_called_once_with(
             instance, network_info=network_info)
         block_device_info_get_mapping.assert_called_once_with(bdm_info)
 
-    @mock.patch('nova.virt.driver.block_device_info_get_mapping')
-    @mock.patch('nova.virt.libvirt.driver.LibvirtDriver.'
-                '_get_serial_ports_from_instance')
-    @mock.patch('nova.virt.libvirt.driver.LibvirtDriver._undefine_domain')
+    @mock.patch.object(driver, 'block_device_info_get_mapping')
+    @mock.patch.object(host.Host, "get_guest")
+    @mock.patch.object(libvirt_driver.LibvirtDriver, '_undefine_domain')
     def test_cleanup_serial_console_domain_gone(
-            self, undefine, get_ports, block_device_info_get_mapping):
+            self, undefine, get_guest, block_device_info_get_mapping):
         self.flags(enabled="True", group='serial_console')
         instance = {'name': 'i1'}
         network_info = {}
@@ -11803,12 +11891,9 @@ class LibvirtConnTestCase(test.NoDBTestCase):
 
         block_device_info_get_mapping.return_value = ()
 
-        # Ensure _get_serial_ports_from_instance raises same exception
-        # that would have occurred if domain was gone.
-        def exception_with_yield(instance):
-            raise exception.InstanceNotFound("domain undefined")
-            yield
-        get_ports.side_effect = exception_with_yield
+        # Ensure get_guest raises same exception that would have occurred
+        # if domain was gone.
+        get_guest.side_effect = exception.InstanceNotFound("domain undefined")
 
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI())
         drvr.firewall_driver = firewall_driver
@@ -11817,7 +11902,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             block_device_info=bdm_info,
             destroy_disks=False, destroy_vifs=False)
 
-        get_ports.assert_called_once_with(instance)
+        get_guest.assert_called_once_with(instance)
         undefine.assert_called_once_with(instance)
         firewall_driver.unfilter_instance.assert_called_once_with(
             instance, network_info=network_info)
@@ -12399,7 +12484,8 @@ class LibvirtDriverTestCase(test.NoDBTestCase):
             pass
 
         def fake_copy_image(src, dest, host=None, receive=False,
-                            on_execute=None, on_completion=None):
+                            on_execute=None, on_completion=None,
+                            compression=True):
             self.assertIsNotNone(on_execute)
             self.assertIsNotNone(on_completion)
 
@@ -13876,6 +13962,85 @@ class LibvirtDriverTestCase(test.NoDBTestCase):
         vcpu_model_1 = drv._cpu_config_to_vcpu_model(cpu, vcpu_model)
         self.assertEqual(cpumodel.MODE_HOST_MODEL, vcpu_model.mode)
         self.assertEqual(vcpu_model, vcpu_model_1)
+
+    @mock.patch.object(lvm, 'get_volume_size', return_value=10)
+    @mock.patch.object(host.Host, "get_guest")
+    @mock.patch.object(dmcrypt, 'delete_volume')
+    @mock.patch('nova.virt.libvirt.driver.LibvirtDriver.unfilter_instance')
+    @mock.patch('nova.virt.libvirt.driver.LibvirtDriver._undefine_domain')
+    @mock.patch.object(objects.Instance, 'save')
+    def test_cleanup_lvm_encrypted(self, mock_save, mock_undefine_domain,
+                                   mock_unfilter, mock_delete_volume,
+                                   mock_get_guest, mock_get_size):
+        drv = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
+        instance = objects.Instance(uuid='fake-uuid', id=1,
+                                    ephemeral_key_uuid='000-000-000')
+        instance.system_metadata = {}
+        block_device_info = {'root_device_name': '/dev/vda',
+                             'ephemerals': [],
+                             'block_device_mapping': []}
+        self.flags(images_type="lvm",
+                   group='libvirt')
+        dom_xml = """
+              <domain type="kvm">
+                <devices>
+                  <disk type="block">
+                    <driver name='qemu' type='raw' cache='none'/>
+                    <source dev="/dev/mapper/fake-dmcrypt"/>
+                    <target dev="vda" bus="virtio" serial="1234"/>
+                  </disk>
+                </devices>
+              </domain>
+              """
+        dom = mock.MagicMock()
+        dom.XMLDesc.return_value = dom_xml
+        guest = libvirt_guest.Guest(dom)
+        mock_get_guest.return_value = guest
+        drv.cleanup(self.context, instance, 'fake_network', destroy_vifs=False,
+                        block_device_info=block_device_info)
+        mock_delete_volume.assert_called_once_with('/dev/mapper/fake-dmcrypt')
+
+    @mock.patch.object(lvm, 'get_volume_size', return_value=10)
+    @mock.patch.object(host.Host, "get_guest")
+    @mock.patch.object(dmcrypt, 'delete_volume')
+    def _test_cleanup_lvm(self, mock_delete_volume, mock_get_guest, mock_size,
+                          encrypted=False):
+
+        drv = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
+        instance = objects.Instance(uuid='fake-uuid', id=1,
+                                    ephemeral_key_uuid='000-000-000')
+        block_device_info = {'root_device_name': '/dev/vda',
+                             'ephemerals': [],
+                             'block_device_mapping': []}
+        dev_name = 'fake-dmcrypt' if encrypted else 'fake'
+        dom_xml = """
+              <domain type="kvm">
+                <devices>
+                  <disk type="block">
+                    <driver name='qemu' type='raw' cache='none'/>
+                    <source dev="/dev/mapper/%s"/>
+                    <target dev="vda" bus="virtio" serial="1234"/>
+                  </disk>
+                </devices>
+              </domain>
+              """ % dev_name
+        dom = mock.MagicMock()
+        dom.XMLDesc.return_value = dom_xml
+        guest = libvirt_guest.Guest(dom)
+        mock_get_guest.return_value = guest
+        drv._cleanup_lvm(instance, block_device_info)
+
+        if encrypted:
+            mock_delete_volume.assert_called_once_with(
+                '/dev/mapper/fake-dmcrypt')
+        else:
+            self.assertFalse(mock_delete_volume.called)
+
+    def test_cleanup_lvm(self):
+        self._test_cleanup_lvm()
+
+    def test_cleanup_encrypted_lvm(self):
+        self._test_cleanup_lvm(encrypted=True)
 
     def test_vcpu_model_to_config(self):
         drv = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)

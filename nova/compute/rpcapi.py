@@ -1,5 +1,4 @@
 # Copyright 2013 Red Hat, Inc.
-#
 #    Licensed under the Apache License, Version 2.0 (the "License"); you may
 #    not use this file except in compliance with the License. You may obtain
 #    a copy of the License at
@@ -21,10 +20,12 @@ from oslo_log import log as logging
 import oslo_messaging as messaging
 from oslo_serialization import jsonutils
 
+from nova import context
 from nova import exception
-from nova.i18n import _
+from nova.i18n import _, _LI, _LE
 from nova import objects
 from nova.objects import base as objects_base
+from nova.objects import service as service_obj
 from nova import rpc
 
 rpcapi_opts = [
@@ -301,21 +302,56 @@ class ComputeAPI(object):
         * 4.2  - Add migration argument to live_migration()
         * 4.3  - Added get_mks_console method
         * 4.4  - Make refresh_instance_security_rules send an instance object
+        * 4.5  - Add migration, scheduler_node and limits arguments to
+                 rebuild_instance()
+
+        ... Liberty supports messaging version 4.5. So, any changes to
+        existing methods in 4.x after that point should be done so that they
+        can handle the version_cap being set to 4.5
     '''
 
     VERSION_ALIASES = {
         'icehouse': '3.23',
         'juno': '3.35',
         'kilo': '4.0',
+        'liberty': '4.5',
     }
 
     def __init__(self):
         super(ComputeAPI, self).__init__()
         target = messaging.Target(topic=CONF.compute_topic, version='4.0')
-        version_cap = self.VERSION_ALIASES.get(CONF.upgrade_levels.compute,
-                                               CONF.upgrade_levels.compute)
+        upgrade_level = CONF.upgrade_levels.compute
+        if upgrade_level == 'auto':
+            version_cap = self._determine_version_cap(target)
+        else:
+            version_cap = self.VERSION_ALIASES.get(upgrade_level,
+                                                   upgrade_level)
         serializer = objects_base.NovaObjectSerializer()
         self.client = self.get_client(target, version_cap, serializer)
+
+    def _determine_version_cap(self, target):
+        # FIXME(danms): We should reload this on SIGHUP, or by timer
+        service_version = objects.Service.get_minimum_version(
+            context.get_admin_context(), 'compute')
+        history = service_obj.SERVICE_VERSION_HISTORY
+        try:
+            version_cap = history[service_version]['compute_rpc']
+        except IndexError:
+            LOG.error(_LE('Failed to extract compute RPC version from '
+                          'service history because I am too '
+                          'old (minimum version is now %(version)i)'),
+                      {'version': service_version})
+            raise exception.ServiceTooOld()
+        except KeyError:
+            LOG.error(_LE('Failed to extract compute RPC version from '
+                          'service history for version %(version)i'),
+                      {'version': service_version})
+            return target.version
+        LOG.info(_LI('Automatically selected compute RPC version %(rpc)s '
+                     'from minimum service version %(service)i'),
+                 {'rpc': version_cap,
+                  'service': service_version})
+        return version_cap
 
     def _compat_ver(self, current, legacy):
         if self.client.can_send_version(current):
@@ -606,12 +642,21 @@ class ComputeAPI(object):
 
     def rebuild_instance(self, ctxt, instance, new_pass, injected_files,
             image_ref, orig_image_ref, orig_sys_metadata, bdms,
-            recreate=False, on_shared_storage=False, host=None,
-            preserve_ephemeral=False, kwargs=None):
+            recreate=False, on_shared_storage=False, host=None, node=None,
+            preserve_ephemeral=False, migration=None, limits=None,
+            kwargs=None):
         # NOTE(danms): kwargs is only here for cells compatibility, don't
         # actually send it to compute
-        extra = {'preserve_ephemeral': preserve_ephemeral}
-        version = '4.0'
+        extra = {'preserve_ephemeral': preserve_ephemeral,
+                 'migration': migration,
+                 'scheduled_node': node,
+                 'limits': limits}
+        version = '4.5'
+        if not self.client.can_send_version(version):
+            version = '4.0'
+            extra.pop('migration')
+            extra.pop('scheduled_node')
+            extra.pop('limits')
         cctxt = self.client.prepare(server=_compute_host(host, instance),
                 version=version)
         cctxt.cast(ctxt, 'rebuild_instance',

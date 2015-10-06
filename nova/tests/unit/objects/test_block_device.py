@@ -83,8 +83,8 @@ class _TestBlockDeviceMappingObject(object):
                 self.assertTrue(len(cells_update_mock.call_args[0]) > 1)
                 self.assertIsInstance(cells_update_mock.call_args[0][1],
                                       block_device_obj.BlockDeviceMapping)
-                self.assertEqual(cells_update_mock.call_args[1], {'create':
-                    create})
+                self.assertEqual({'create': create},
+                                 cells_update_mock.call_args[1])
 
     def test_save_nocells(self):
         self._test_save()
@@ -191,12 +191,12 @@ class _TestBlockDeviceMappingObject(object):
                 if cell_type == 'compute' and 'device_name' in values:
                     self.assertEqual(1, cells_update_mock.call_count)
                     self.assertTrue(len(cells_update_mock.call_args[0]) > 1)
-                    self.assertEqual(cells_update_mock.call_args[0][0],
-                                     self.context)
+                    self.assertEqual(self.context,
+                                     cells_update_mock.call_args[0][0])
                     self.assertIsInstance(cells_update_mock.call_args[0][1],
                                           block_device_obj.BlockDeviceMapping)
-                    self.assertEqual(cells_update_mock.call_args[1],
-                                     {'create': update_or_create or None})
+                    self.assertEqual({'create': update_or_create or None},
+                                     cells_update_mock.call_args[1])
                 else:
                     self.assertFalse(cells_update_mock.called)
 
@@ -346,47 +346,6 @@ class _TestBlockDeviceMappingListObject(object):
                 objects.BlockDeviceMappingList.get_by_instance_uuid(
                     self.context, 'fake_instance_uuid'))
         self.assertEqual(0, len(bdm_list))
-
-    def test_root_volume_metadata(self):
-        fake_volume = {
-                'volume_image_metadata': {'vol_test_key': 'vol_test_value'}}
-
-        class FakeVolumeApi(object):
-            def get(*args, **kwargs):
-                return fake_volume
-
-        block_device_mapping = block_device_obj.block_device_make_list(None, [
-            fake_block_device.FakeDbBlockDeviceDict(
-                {'id': 1,
-                 'boot_index': 0,
-                 'source_type': 'volume',
-                 'destination_type': 'volume',
-                 'volume_id': 'fake_volume_id',
-                 'delete_on_termination': False})])
-
-        volume_meta = block_device_mapping.root_metadata(
-            self.context, None, FakeVolumeApi())
-        self.assertEqual(fake_volume['volume_image_metadata'], volume_meta)
-
-    def test_root_image_metadata(self):
-        fake_image = {'properties': {'img_test_key': 'img_test_value'}}
-
-        class FakeImageApi(object):
-            def show(*args, **kwargs):
-                return fake_image
-
-        block_device_mapping = block_device_obj.block_device_make_list(None, [
-            fake_block_device.FakeDbBlockDeviceDict(
-                {'id': 1,
-                 'boot_index': 0,
-                 'source_type': 'image',
-                 'destination_type': 'local',
-                 'image_id': "fake-image",
-                 'delete_on_termination': True})])
-
-        image_meta = block_device_mapping.root_metadata(
-            self.context, FakeImageApi(), None)
-        self.assertEqual(fake_image['properties'], image_meta)
 
 
 class TestBlockDeviceMappingListObject(test_objects._LocalTest,

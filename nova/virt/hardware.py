@@ -26,6 +26,7 @@ from nova import context
 from nova import exception
 from nova.i18n import _
 from nova import objects
+from nova.objects import instance as obj_instance
 
 virt_cpu_opts = [
     cfg.StrOpt('vcpu_pin_set',
@@ -81,6 +82,11 @@ def parse_cpu_spec(spec):
         # Note the count limit in the .split() call
         range_parts = rule.split('-', 1)
         if len(range_parts) > 1:
+            reject = False
+            if range_parts[0] and range_parts[0][0] == '^':
+                reject = True
+                range_parts[0] = str(range_parts[0][1:])
+
             # So, this was a range; start by converting the parts to ints
             try:
                 start, end = [int(p.strip()) for p in range_parts]
@@ -92,7 +98,10 @@ def parse_cpu_spec(spec):
                 raise exception.Invalid(_("Invalid range expression %r")
                                         % rule)
             # Add available CPU ids to set
-            cpuset_ids |= set(range(start, end + 1))
+            if not reject:
+                cpuset_ids |= set(range(start, end + 1))
+            else:
+                cpuset_reject_ids |= set(range(start, end + 1))
         elif rule[0] == '^':
             # Not a range, the rule is an exclusion rule; convert to int
             try:
@@ -754,7 +763,7 @@ def _numa_fit_instance_cell_with_pinning(host_cell, instance_cell):
 
 
 def _numa_fit_instance_cell(host_cell, instance_cell, limit_cell=None):
-    """Check if a instance cell can fit and set it's cell id
+    """Check if an instance cell can fit and set it's cell id
 
     :param host_cell: host cell to fit the instance cell onto
     :param instance_cell: instance cell we want to fit
@@ -1174,7 +1183,7 @@ def instance_topology_from_instance(instance):
     Instance object, this makes sure we get beck either None, or an instance
     of objects.InstanceNUMATopology class.
     """
-    if isinstance(instance, objects.Instance):
+    if isinstance(instance, obj_instance._BaseInstance):
         # NOTE (ndipanov): This may cause a lazy-load of the attribute
         instance_numa_topology = instance.numa_topology
     else:

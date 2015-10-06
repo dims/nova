@@ -148,6 +148,7 @@ Open Development.
    hooks
    block_device_mapping
    addmethod.openstackapi
+   conductor
 
 Architecture Evolution Plans
 -----------------------------
@@ -178,6 +179,15 @@ Advanced testing and guides
     gmr
     testing/libvirt-numa
     testing/serial-console
+
+Sample Configuration File
+-------------------------
+
+.. toctree::
+    :maxdepth: 1
+
+    sample_config
+
 
 Man Pages
 ----------

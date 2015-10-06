@@ -188,6 +188,13 @@ class ConductorAPI(object):
     * 2.2 - Add object_backport_versions()
     * 2.3 - Add object_class_action_versions()
     * Remove compute_node_create()
+    * Remove object_backport()
+
+    * 3.0  - Drop backwards compatibility
+
+    ... Liberty supports message version 3.0.  So, any changes to
+    existing methods in 3.x after that point should be done such
+    that they can handle the version_cap being set to 3.0.
     """
 
     VERSION_ALIASES = {
@@ -196,11 +203,12 @@ class ConductorAPI(object):
         'icehouse': '2.0',
         'juno': '2.0',
         'kilo': '2.1',
+        'liberty': '3.0',
     }
 
     def __init__(self):
         super(ConductorAPI, self).__init__()
-        target = messaging.Target(topic=CONF.conductor.topic, version='2.0')
+        target = messaging.Target(topic=CONF.conductor.topic, version='3.0')
         version_cap = self.VERSION_ALIASES.get(CONF.upgrade_levels.conductor,
                                                CONF.upgrade_levels.conductor)
         serializer = objects_base.NovaObjectSerializer()
@@ -212,26 +220,21 @@ class ConductorAPI(object):
         cctxt = self.client.prepare()
         return cctxt.call(context, 'provider_fw_rule_get_all')
 
+    # TODO(hanlind): This method can be removed once oslo.versionedobjects
+    # has been converted to use version_manifests in remotable_classmethod
+    # operations, which will use the new class action handler.
     def object_class_action(self, context, objname, objmethod, objver,
                             args, kwargs):
-        if self.client.can_send_version('2.3'):
-            # NOTE(danms): If we're new enough, collect the object
-            # version manifest and redirect the call to the newer
-            # class action handler
-            versions = ovo_base.obj_tree_get_versions(objname)
-            return self.object_class_action_versions(context,
-                                                     objname,
-                                                     objmethod,
-                                                     versions,
-                                                     args, kwargs)
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'object_class_action',
-                          objname=objname, objmethod=objmethod,
-                          objver=objver, args=args, kwargs=kwargs)
+        versions = ovo_base.obj_tree_get_versions(objname)
+        return self.object_class_action_versions(context,
+                                                 objname,
+                                                 objmethod,
+                                                 versions,
+                                                 args, kwargs)
 
     def object_class_action_versions(self, context, objname, objmethod,
                                      object_versions, args, kwargs):
-        cctxt = self.client.prepare(version='2.3')
+        cctxt = self.client.prepare()
         return cctxt.call(context, 'object_class_action_versions',
                           objname=objname, objmethod=objmethod,
                           object_versions=object_versions,
@@ -242,13 +245,8 @@ class ConductorAPI(object):
         return cctxt.call(context, 'object_action', objinst=objinst,
                           objmethod=objmethod, args=args, kwargs=kwargs)
 
-    def object_backport(self, context, objinst, target_version):
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'object_backport', objinst=objinst,
-                          target_version=target_version)
-
     def object_backport_versions(self, context, objinst, object_versions):
-        cctxt = self.client.prepare(version='2.2')
+        cctxt = self.client.prepare()
         return cctxt.call(context, 'object_backport_versions', objinst=objinst,
                           object_versions=object_versions)
 

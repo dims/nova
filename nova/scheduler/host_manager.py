@@ -105,11 +105,6 @@ class ReadOnlyDict(IterableUserDict):
         raise TypeError()
 
 
-# Representation of a single metric value from a compute node.
-MetricItem = collections.namedtuple(
-             'MetricItem', ['value', 'timestamp', 'source'])
-
-
 @utils.expects_func_args('self', 'instance')
 def set_update_time_on_success(function):
     """Set updated time of HostState when consuming succeed."""
@@ -208,7 +203,7 @@ class HostState(object):
                 # can occur when an instance in database is not on host
                 LOG.warning(_LW("Host %(hostname)s has more disk space than "
                                 "database expected "
-                                "(%(physical)sgb > %(database)sgb)"),
+                                "(%(physical)s GB > %(database)s GB)"),
                             {'physical': least_gb, 'database': free_gb,
                              'hostname': compute.hypervisor_hostname})
             free_gb = min(least_gb, free_gb)

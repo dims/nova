@@ -23,6 +23,7 @@ from nova.cells import utils as cells_utils
 from nova import exception
 from nova import objects
 from nova import test
+from nova.tests.unit import fake_instance
 
 
 class CellsUtilsTestCase(test.NoDBTestCase):
@@ -37,13 +38,18 @@ class CellsUtilsTestCase(test.NoDBTestCase):
 
         @staticmethod
         def instance_get_all_by_filters(context, filters,
-                sort_key, sort_dir):
+                sort_key, sort_dir, limit, marker):
+            # Pretend we return a full list the first time otherwise we loop
+            # infinitely
+            if marker is not None:
+                return []
             self.assertEqual(fake_context, context)
             self.assertEqual('deleted', sort_key)
             self.assertEqual('asc', sort_dir)
             call_info['got_filters'] = filters
             call_info['get_all'] += 1
-            return ['fake_instance1', 'fake_instance2', 'fake_instance3']
+            instances = [fake_instance.fake_db_instance() for i in range(3)]
+            return instances
 
         self.stubs.Set(objects.InstanceList, 'get_by_filters',
                 instance_get_all_by_filters)
@@ -83,6 +89,58 @@ class CellsUtilsTestCase(test.NoDBTestCase):
                  'project_id': 'fake-project'}, call_info['got_filters'])
         self.assertEqual(2, call_info['shuffle'])
 
+    @mock.patch.object(objects.InstanceList, 'get_by_filters')
+    @mock.patch.object(random, 'shuffle')
+    def _test_get_instances_pagination(self, mock_shuffle,
+            mock_get_by_filters, shuffle=False, updated_since=None,
+            project_id=None):
+        fake_context = 'fake_context'
+
+        instances0 = objects.instance._make_instance_list(fake_context,
+                objects.InstanceList(),
+                [fake_instance.fake_db_instance() for i in range(3)],
+                expected_attrs=None)
+        marker0 = instances0[-1]['uuid']
+        instances1 = objects.instance._make_instance_list(fake_context,
+                objects.InstanceList(),
+                [fake_instance.fake_db_instance() for i in range(3)],
+                expected_attrs=None)
+        marker1 = instances1[-1]['uuid']
+
+        mock_get_by_filters.side_effect = [instances0, instances1, []]
+
+        instances = cells_utils.get_instances_to_sync(fake_context,
+                updated_since, project_id, shuffle=shuffle)
+        self.assertEqual(len([x for x in instances]), 6)
+
+        filters = {}
+        if updated_since is not None:
+            filters['changes-since'] = updated_since
+        if project_id is not None:
+            filters['project_id'] = project_id
+        limit = 100
+        expected_calls = [mock.call(fake_context, filters, sort_key='deleted',
+                              sort_dir='asc', limit=limit, marker=None),
+                          mock.call(fake_context, filters, sort_key='deleted',
+                              sort_dir='asc', limit=limit, marker=marker0),
+                          mock.call(fake_context, filters, sort_key='deleted',
+                              sort_dir='asc', limit=limit, marker=marker1)]
+        mock_get_by_filters.assert_has_calls(expected_calls)
+        self.assertEqual(3, mock_get_by_filters.call_count)
+
+    def test_get_instances_to_sync_limit(self):
+        self._test_get_instances_pagination()
+
+    def test_get_instances_to_sync_shuffle(self):
+        self._test_get_instances_pagination(shuffle=True)
+
+    def test_get_instances_to_sync_updated_since(self):
+        self._test_get_instances_pagination(updated_since='fake-updated-since')
+
+    def test_get_instances_to_sync_multiple_params(self):
+        self._test_get_instances_pagination(project_id='fake-project',
+                updated_since='fake-updated-since', shuffle=True)
+
     def test_split_cell_and_item(self):
         path = 'australia', 'queensland', 'gold_coast'
         cell = cells_utils.PATH_CELL_SEP.join(path)
@@ -104,10 +162,8 @@ class CellsUtilsTestCase(test.NoDBTestCase):
         self.assertEqual(cell, result_cell)
         self.assertEqual(item, result_item)
 
-    @mock.patch.object(objects.Service, 'get_by_id')
-    def test_add_cell_to_compute_node_no_service(self, mock_get_by_id):
-        fake_compute = objects.ComputeNode(id=1, host='fake', service_id=1)
-        mock_get_by_id.side_effect = exception.ServiceNotFound(service_id=1)
+    def test_add_cell_to_compute_node(self):
+        fake_compute = objects.ComputeNode(id=1, host='fake')
         cell_path = 'fake_path'
 
         proxy = cells_utils.add_cell_to_compute_node(fake_compute, cell_path)
@@ -116,25 +172,6 @@ class CellsUtilsTestCase(test.NoDBTestCase):
         self.assertEqual(cells_utils.cell_with_item(cell_path, 1), proxy.id)
         self.assertEqual(cells_utils.cell_with_item(cell_path, 'fake'),
                          proxy.host)
-        self.assertRaises(exception.ServiceNotFound, getattr, proxy, 'service')
-
-    @mock.patch.object(objects.Service, 'get_by_id')
-    def test_add_cell_to_compute_node_with_service(self, mock_get_by_id):
-        fake_compute = objects.ComputeNode(id=1, host='fake', service_id=1)
-        mock_get_by_id.return_value = objects.Service(id=1, host='fake-svc')
-        cell_path = 'fake_path'
-
-        proxy = cells_utils.add_cell_to_compute_node(fake_compute, cell_path)
-
-        self.assertIsInstance(proxy, cells_utils.ComputeNodeProxy)
-        self.assertEqual(cells_utils.cell_with_item(cell_path, 1), proxy.id)
-        self.assertEqual(cells_utils.cell_with_item(cell_path, 'fake'),
-                         proxy.host)
-        self.assertIsInstance(proxy.service, cells_utils.ServiceProxy)
-        self.assertEqual(cells_utils.cell_with_item(cell_path, 1),
-                         proxy.service.id)
-        self.assertEqual(cells_utils.cell_with_item(cell_path, 'fake-svc'),
-                         proxy.service.host)
 
     @mock.patch.object(objects.Service, 'obj_load_attr')
     def test_add_cell_to_service_no_compute_node(self, mock_get_by_id):

@@ -112,6 +112,10 @@ _POWER_STATE_MAP = {
     ironic_states.POWER_OFF: power_state.SHUTDOWN,
 }
 
+_UNPROVISION_STATES = (ironic_states.ACTIVE, ironic_states.DEPLOYFAIL,
+                       ironic_states.ERROR, ironic_states.DEPLOYWAIT,
+                       ironic_states.DEPLOYING)
+
 
 def map_power_state(state):
     try:
@@ -257,20 +261,30 @@ class IronicDriver(virt_driver.ComputeDriver):
         properties['capabilities'] = node.properties.get('capabilities')
         return properties
 
-    def _parse_node_instance_info(self, node):
-        """Helper method to parse the node's instance info."""
+    def _parse_node_instance_info(self, node, props):
+        """Helper method to parse the node's instance info.
+
+        If a property cannot be looked up via instance_info, use the original
+        value from the properties dict. This is most likely to be correct;
+        it should only be incorrect if the properties were changed directly
+        in Ironic while an instance was deployed.
+        """
         instance_info = {}
 
+        # add this key because it's different in instance_info for some reason
+        props['vcpus'] = props['cpus']
         for prop in ('vcpus', 'memory_mb', 'local_gb'):
+            original = props[prop]
             try:
-                instance_info[prop] = int(node.instance_info.get(prop, 0))
+                instance_info[prop] = int(node.instance_info.get(prop,
+                                                                 original))
             except (TypeError, ValueError):
                 LOG.warning(_LW('Node %(uuid)s has a malformed "%(prop)s". '
                                 'It should be an integer but its value '
                                 'is "%(value)s".'),
                             {'uuid': node.uuid, 'prop': prop,
                              'value': node.instance_info.get(prop)})
-                instance_info[prop] = 0
+                instance_info[prop] = original
 
         return instance_info
 
@@ -321,7 +335,7 @@ class IronicDriver(virt_driver.ComputeDriver):
             # Node is in the process of deploying, is deployed, or is in
             # the process of cleaning up from a deploy. Report all of its
             # resources as in use.
-            instance_info = self._parse_node_instance_info(node)
+            instance_info = self._parse_node_instance_info(node, properties)
 
             # Use instance_info instead of properties here is because the
             # properties of a deployed node can be changed which will count
@@ -902,10 +916,7 @@ class IronicDriver(virt_driver.ComputeDriver):
             #             without raising any exceptions.
             return
 
-        if node.provision_state in (ironic_states.ACTIVE,
-                                    ironic_states.DEPLOYFAIL,
-                                    ironic_states.ERROR,
-                                    ironic_states.DEPLOYWAIT):
+        if node.provision_state in _UNPROVISION_STATES:
             self._unprovision(self.ironicclient, instance, node)
 
         self._cleanup_deploy(context, node, instance, network_info)

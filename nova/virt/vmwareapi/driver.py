@@ -312,22 +312,6 @@ class VMwareVCDriver(driver.ComputeDriver):
                                      network_info, image_meta, resize_instance,
                                      block_device_info, power_on)
 
-    def live_migration(self, context, instance, dest,
-                       post_method, recover_method, block_migration=False,
-                       migrate_data=None):
-        """Live migration of an instance to another host."""
-        self._vmops.live_migration(context, instance, dest,
-                                   post_method, recover_method,
-                                   block_migration)
-
-    def rollback_live_migration_at_destination(self, context, instance,
-                                               network_info,
-                                               block_device_info,
-                                               destroy_disks=True,
-                                               migrate_data=None):
-        """Clean up destination node after a failed live migration."""
-        self.destroy(context, instance, network_info, block_device_info)
-
     def get_instance_disk_info(self, instance, block_device_info=None):
         pass
 
@@ -441,14 +425,18 @@ class VMwareVCDriver(driver.ComputeDriver):
             # plugging. Hence we need to power off the instance and update
             # the instance state.
             self._vmops.power_off(instance)
-            # TODO(garyk): update the volumeops to read the state form the
-            # VM instead of relying on a instance flag
+            # TODO(garyk): update the volumeops to read the state from the
+            # VM instead of relying on an instance flag
             instance.vm_state = vm_states.STOPPED
             for disk in block_device_mapping:
                 connection_info = disk['connection_info']
                 try:
                     self.detach_volume(connection_info, instance,
                                        disk.get('device_name'))
+                except exception.StorageError:
+                    LOG.warning(_LW('The volume %s does not exist!'),
+                                disk.get('device_name'),
+                                instance=instance)
                 except Exception as e:
                     with excutils.save_and_reraise_exception():
                         LOG.error(_LE("Failed to detach %(device_name)s. "

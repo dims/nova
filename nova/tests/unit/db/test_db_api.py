@@ -2176,10 +2176,17 @@ class InstanceTestCase(test.TestCase, ModelsObjectComparatorMixin):
         self._assertEqualListsOfInstances([instance], result)
 
     def test_instance_get_all_by_filters_unicode_value(self):
-        instance = self.create_instance_with_args(display_name=u'test♥')
+        i1 = self.create_instance_with_args(display_name=u'test♥')
+        i2 = self.create_instance_with_args(display_name=u'test')
+        i3 = self.create_instance_with_args(display_name=u'test♥test')
+        self.create_instance_with_args(display_name='diff')
         result = db.instance_get_all_by_filters(self.ctxt,
                                                 {'display_name': u'test'})
-        self._assertEqualListsOfInstances([instance], result)
+        self._assertEqualListsOfInstances([i1, i2, i3], result)
+
+        result = db.instance_get_all_by_filters(self.ctxt,
+                                                {'display_name': u'test♥'})
+        self._assertEqualListsOfInstances(result, [i1, i3])
 
     def test_instance_get_all_by_filters_tags(self):
         instance = self.create_instance_with_args(
@@ -3159,6 +3166,20 @@ class ServiceTestCase(test.TestCase, ModelsObjectComparatorMixin):
         real_service1 = db.service_get(self.ctxt, service1['id'])
         self._assertEqualObjects(service1, real_service1,
                                  ignored_keys=['compute_node'])
+
+    def test_service_get_minimum_version(self):
+        self._create_service({'version': 1,
+                              'host': 'host3',
+                              'binary': 'compute',
+                              'forced_down': True})
+        self._create_service({'version': 2,
+                              'host': 'host1',
+                              'binary': 'compute'})
+        self._create_service({'version': 3,
+                              'host': 'host2',
+                              'binary': 'compute'})
+        self.assertEqual(2, db.service_get_minimum_version(self.ctxt,
+                                                           'compute'))
 
     def test_service_get_not_found_exception(self):
         self.assertRaises(exception.ServiceNotFound,
@@ -4532,6 +4553,28 @@ class FixedIPTestCase(BaseInstanceTypeTestCase):
                               self.ctxt, address, instance_uuid)
             self.assertEqual(1, mock_first.call_count)
 
+    def test_fixed_ip_associate_with_vif(self):
+        instance_uuid = self._create_instance()
+        network = db.network_create_safe(self.ctxt, {})
+        vif = db.virtual_interface_create(self.ctxt, {})
+        address = self.create_fixed_ip()
+
+        fixed_ip = db.fixed_ip_associate(self.ctxt, address, instance_uuid,
+                                         network_id=network['id'],
+                                         virtual_interface_id=vif['id'])
+
+        self.assertTrue(fixed_ip['allocated'])
+        self.assertEqual(vif['id'], fixed_ip['virtual_interface_id'])
+
+    def test_fixed_ip_associate_not_allocated_without_vif(self):
+        instance_uuid = self._create_instance()
+        address = self.create_fixed_ip()
+
+        fixed_ip = db.fixed_ip_associate(self.ctxt, address, instance_uuid)
+
+        self.assertFalse(fixed_ip['allocated'])
+        self.assertIsNone(fixed_ip['virtual_interface_id'])
+
     def test_fixed_ip_associate_pool_invalid_uuid(self):
         instance_uuid = '123'
         self.assertRaises(exception.InvalidUUID, db.fixed_ip_associate_pool,
@@ -5597,7 +5640,7 @@ class VolumeUsageDBApiTestCase(test.TestCase):
 
     def test_vol_usage_update_totals_update_when_blockdevicestats_reset(self):
         # This is unlikely to happen, but could when a volume is detached
-        # right after a instance has rebooted / recovered and before
+        # right after an instance has rebooted / recovered and before
         # the system polled and updated the volume usage cache table.
         ctxt = context.get_admin_context()
         now = timeutils.utcnow()
@@ -6143,7 +6186,7 @@ class NetworkTestCase(test.TestCase, ModelsObjectComparatorMixin):
             'network_id': network.id, 'allocated': True,
             'virtual_interface_id': virtual_interface.id})
         db.fixed_ip_associate(self.ctxt, ip, instance.uuid,
-            network.id)
+            network.id, virtual_interface_id=virtual_interface['id'])
         return network, instance
 
     def test_network_get_associated_default_route(self):
@@ -6717,6 +6760,13 @@ class QuotaTestCase(test.TestCase, ModelsObjectComparatorMixin):
                     'fixed_ips': {'in_use': 2, 'reserved': 2}}
         self.assertEqual(expected, db.quota_usage_get_all_by_project_and_user(
                          self.ctxt, 'p1', 'u1'))
+
+    def test_get_project_user_quota_usages_in_order(self):
+        _quota_reserve(self.ctxt, 'p1', 'u1')
+        with mock.patch.object(query.Query, 'order_by') as order_mock:
+            sqlalchemy_api._get_project_user_quota_usages(
+                self.ctxt, None, 'p1', 'u1')
+        self.assertTrue(order_mock.called)
 
     def test_quota_usage_update_nonexistent(self):
         self.assertRaises(exception.QuotaUsageNotFound, db.quota_usage_update,

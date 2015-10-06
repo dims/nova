@@ -100,6 +100,12 @@ def service_get(context, service_id, use_slave=False):
                             use_slave=use_slave)
 
 
+def service_get_minimum_version(context, binary, use_slave=False):
+    """Get the minimum service version in the database."""
+    return IMPL.service_get_minimum_version(context, binary,
+                                            use_slave=use_slave)
+
+
 def service_get_by_host_and_topic(context, host, topic):
     """Get a service by hostname and topic it listens to."""
     return IMPL.service_get_by_host_and_topic(context, host, topic)
@@ -488,25 +494,26 @@ def migration_get_all_by_filters(context, filters):
 
 
 def fixed_ip_associate(context, address, instance_uuid, network_id=None,
-                       reserved=False):
+                       reserved=False, virtual_interface_id=None):
     """Associate fixed ip to instance.
 
     Raises if fixed ip is not available.
 
     """
     return IMPL.fixed_ip_associate(context, address, instance_uuid, network_id,
-                                   reserved)
+                                   reserved, virtual_interface_id)
 
 
 def fixed_ip_associate_pool(context, network_id, instance_uuid=None,
-                            host=None):
+                            host=None, virtual_interface_id=None):
     """Find free ip in network and associate it to instance or host.
 
     Raises if one is not available.
 
     """
     return IMPL.fixed_ip_associate_pool(context, network_id,
-                                        instance_uuid, host)
+                                        instance_uuid, host,
+                                        virtual_interface_id)
 
 
 def fixed_ip_create(context, values):

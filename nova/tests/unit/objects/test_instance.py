@@ -88,7 +88,7 @@ class _TestInstanceObject(object):
         self.assertJsonEqual(primitive, expected)
         inst2 = objects.Instance.obj_from_primitive(primitive)
         self.assertIsInstance(inst2.launched_at, datetime.datetime)
-        self.assertEqual(inst2.launched_at, red_letter_date)
+        self.assertEqual(red_letter_date, inst2.launched_at)
 
     def test_ip_deserialization(self):
         inst = objects.Instance(uuid='fake-uuid', access_ip_v4='1.2.3.4',
@@ -107,8 +107,8 @@ class _TestInstanceObject(object):
         inst2 = objects.Instance.obj_from_primitive(primitive)
         self.assertIsInstance(inst2.access_ip_v4, netaddr.IPAddress)
         self.assertIsInstance(inst2.access_ip_v6, netaddr.IPAddress)
-        self.assertEqual(inst2.access_ip_v4, netaddr.IPAddress('1.2.3.4'))
-        self.assertEqual(inst2.access_ip_v6, netaddr.IPAddress('::1'))
+        self.assertEqual(netaddr.IPAddress('1.2.3.4'), inst2.access_ip_v4)
+        self.assertEqual(netaddr.IPAddress('::1'), inst2.access_ip_v6)
 
     def test_get_without_expected(self):
         self.mox.StubOutWithMock(db, 'instance_get_by_uuid')
@@ -184,7 +184,7 @@ class _TestInstanceObject(object):
                         ).AndReturn(self.fake_instance)
         self.mox.ReplayAll()
         inst = objects.Instance.get_by_id(self.context, 'instid')
-        self.assertEqual(inst.uuid, self.fake_instance['uuid'])
+        self.assertEqual(self.fake_instance['uuid'], inst.uuid)
 
     def test_load(self):
         self.mox.StubOutWithMock(db, 'instance_get_by_uuid')
@@ -204,11 +204,11 @@ class _TestInstanceObject(object):
         inst = objects.Instance.get_by_uuid(self.context, fake_uuid)
         self.assertFalse(hasattr(inst, '_obj_metadata'))
         meta = inst.metadata
-        self.assertEqual(meta, {'foo': 'bar'})
+        self.assertEqual({'foo': 'bar'}, meta)
         self.assertTrue(hasattr(inst, '_obj_metadata'))
         # Make sure we don't run load again
         meta2 = inst.metadata
-        self.assertEqual(meta2, {'foo': 'bar'})
+        self.assertEqual({'foo': 'bar'}, meta2)
 
     def test_load_invalid(self):
         inst = objects.Instance(context=self.context, uuid='fake-uuid')
@@ -226,13 +226,13 @@ class _TestInstanceObject(object):
                                 ).AndReturn(fake_instance)
         self.mox.ReplayAll()
         inst = objects.Instance.get_by_uuid(self.context, 'fake-uuid')
-        self.assertEqual(inst.id, fake_instance['id'])
-        self.assertEqual(inst.launched_at.replace(tzinfo=None),
-                         fake_instance['launched_at'])
-        self.assertEqual(str(inst.access_ip_v4),
-                         fake_instance['access_ip_v4'])
-        self.assertEqual(str(inst.access_ip_v6),
-                         fake_instance['access_ip_v6'])
+        self.assertEqual(fake_instance['id'], inst.id)
+        self.assertEqual(fake_instance['launched_at'],
+                         inst.launched_at.replace(tzinfo=None))
+        self.assertEqual(fake_instance['access_ip_v4'],
+                         str(inst.access_ip_v4))
+        self.assertEqual(fake_instance['access_ip_v6'],
+                         str(inst.access_ip_v6))
 
     def test_refresh(self):
         self.mox.StubOutWithMock(db, 'instance_get_by_uuid')
@@ -254,9 +254,9 @@ class _TestInstanceObject(object):
         instance_info_cache.InstanceInfoCache.refresh()
         self.mox.ReplayAll()
         inst = objects.Instance.get_by_uuid(self.context, fake_uuid)
-        self.assertEqual(inst.host, 'orig-host')
+        self.assertEqual('orig-host', inst.host)
         inst.refresh()
-        self.assertEqual(inst.host, 'new-host')
+        self.assertEqual('new-host', inst.host)
         self.assertEqual(set([]), inst.obj_what_changed())
 
     def test_refresh_does_not_recurse(self):
@@ -484,11 +484,11 @@ class _TestInstanceObject(object):
         inst.vcpu_model = test_vcpu_model.fake_vcpumodel
         inst.save()
         self.assertTrue(mock_update.called)
-        self.assertEqual(mock_update.call_count, 1)
+        self.assertEqual(1, mock_update.call_count)
         actual_args = mock_update.call_args
         self.assertEqual(self.context, actual_args[0][0])
         self.assertEqual(inst.uuid, actual_args[0][1])
-        self.assertEqual(list(actual_args[0][2].keys()), ['vcpu_model'])
+        self.assertEqual(['vcpu_model'], list(actual_args[0][2].keys()))
         self.assertJsonEqual(jsonutils.dumps(
                 test_vcpu_model.fake_vcpumodel.obj_to_primitive()),
                              actual_args[0][2]['vcpu_model'])
@@ -505,11 +505,11 @@ class _TestInstanceObject(object):
             self.context)
         inst.save()
         self.assertTrue(mock_update.called)
-        self.assertEqual(mock_update.call_count, 1)
+        self.assertEqual(1, mock_update.call_count)
         actual_args = mock_update.call_args
         self.assertEqual(self.context, actual_args[0][0])
         self.assertEqual(inst.uuid, actual_args[0][1])
-        self.assertEqual(list(actual_args[0][2].keys()), ['migration_context'])
+        self.assertEqual(['migration_context'], list(actual_args[0][2].keys()))
         self.assertIsInstance(
             objects.MigrationContext.obj_from_db_obj(
                 actual_args[0][2]['migration_context']),
@@ -609,7 +609,7 @@ class _TestInstanceObject(object):
         self.mox.ReplayAll()
         inst = objects.Instance.get_by_uuid(self.context, fake_uuid)
         # NOTE(danms): Make sure it's actually a bool
-        self.assertEqual(inst.deleted, True)
+        self.assertTrue(inst.deleted)
 
     def test_get_not_cleaned(self):
         fake_inst = dict(self.fake_instance, id=123, cleaned=None)
@@ -623,7 +623,7 @@ class _TestInstanceObject(object):
         self.mox.ReplayAll()
         inst = objects.Instance.get_by_uuid(self.context, fake_uuid)
         # NOTE(mikal): Make sure it's actually a bool
-        self.assertEqual(inst.cleaned, False)
+        self.assertFalse(inst.cleaned)
 
     def test_get_cleaned(self):
         fake_inst = dict(self.fake_instance, id=123, cleaned=1)
@@ -637,7 +637,7 @@ class _TestInstanceObject(object):
         self.mox.ReplayAll()
         inst = objects.Instance.get_by_uuid(self.context, fake_uuid)
         # NOTE(mikal): Make sure it's actually a bool
-        self.assertEqual(inst.cleaned, True)
+        self.assertTrue(inst.cleaned)
 
     def test_with_info_cache(self):
         fake_inst = dict(self.fake_instance)
@@ -663,8 +663,8 @@ class _TestInstanceObject(object):
                 {'network_info': nwinfo2_json}).AndReturn(fake_info_cache)
         self.mox.ReplayAll()
         inst = objects.Instance.get_by_uuid(self.context, fake_uuid)
-        self.assertEqual(inst.info_cache.network_info, nwinfo1)
-        self.assertEqual(inst.info_cache.instance_uuid, fake_uuid)
+        self.assertEqual(nwinfo1, inst.info_cache.network_info)
+        self.assertEqual(fake_uuid, inst.info_cache.instance_uuid)
         inst.info_cache.network_info = nwinfo2
         inst.save()
 
@@ -706,17 +706,17 @@ class _TestInstanceObject(object):
                                  ).AndReturn(fake_inst['security_groups'][0])
         self.mox.ReplayAll()
         inst = objects.Instance.get_by_uuid(self.context, fake_uuid)
-        self.assertEqual(len(inst.security_groups), 2)
+        self.assertEqual(2, len(inst.security_groups))
         for index, group in enumerate(fake_inst['security_groups']):
             for key in group:
                 self.assertEqual(group[key],
                                  inst.security_groups[index][key])
                 self.assertIsInstance(inst.security_groups[index],
                                       security_group.SecurityGroup)
-        self.assertEqual(inst.security_groups.obj_what_changed(), set())
+        self.assertEqual(set(), inst.security_groups.obj_what_changed())
         inst.security_groups[0].description = 'changed'
         inst.save()
-        self.assertEqual(inst.security_groups.obj_what_changed(), set())
+        self.assertEqual(set(), inst.security_groups.obj_what_changed())
 
     def test_with_empty_security_groups(self):
         fake_inst = dict(self.fake_instance, security_groups=[])
@@ -742,7 +742,7 @@ class _TestInstanceObject(object):
         self.mox.ReplayAll()
         inst = objects.Instance.get_by_uuid(self.context, fake_uuid,
             ['pci_devices'])
-        self.assertEqual(len(inst.pci_devices), 0)
+        self.assertEqual(0, len(inst.pci_devices))
 
     def test_with_pci_devices(self):
         fake_inst = dict(self.fake_instance)
@@ -792,9 +792,9 @@ class _TestInstanceObject(object):
         self.mox.ReplayAll()
         inst = objects.Instance.get_by_uuid(self.context, fake_uuid,
             ['pci_devices'])
-        self.assertEqual(len(inst.pci_devices), 2)
-        self.assertEqual(inst.pci_devices[0].instance_uuid, fake_uuid)
-        self.assertEqual(inst.pci_devices[1].instance_uuid, fake_uuid)
+        self.assertEqual(2, len(inst.pci_devices))
+        self.assertEqual(fake_uuid, inst.pci_devices[0].instance_uuid)
+        self.assertEqual(fake_uuid, inst.pci_devices[1].instance_uuid)
 
     def test_with_fault(self):
         fake_inst = dict(self.fake_instance)
@@ -832,10 +832,9 @@ class _TestInstanceObject(object):
     def test_iteritems_with_extra_attrs(self):
         self.stubs.Set(objects.Instance, 'name', 'foo')
         inst = objects.Instance(uuid='fake-uuid')
-        self.assertEqual(sorted(inst.items()),
-                         sorted({'uuid': 'fake-uuid',
+        self.assertEqual(sorted({'uuid': 'fake-uuid',
                                  'name': 'foo',
-                                }.items()))
+                                }.items()), sorted(inst.items()))
 
     def _test_metadata_change_tracking(self, which):
         inst = objects.Instance(uuid='fake-uuid')
@@ -860,7 +859,7 @@ class _TestInstanceObject(object):
                                 scheduled_at=None,
                                 system_metadata={'foo': 'bar'})
         inst.create()
-        self.assertEqual(inst.host, 'foo-host')
+        self.assertEqual('foo-host', inst.host)
 
     def test_metadata_change_tracking(self):
         self._test_metadata_change_tracking('metadata')
@@ -897,9 +896,9 @@ class _TestInstanceObject(object):
                                  project_id=self.context.project_id,
                                  host='foo-host')
         inst1.create()
-        self.assertEqual(inst1.host, 'foo-host')
+        self.assertEqual('foo-host', inst1.host)
         inst2 = objects.Instance.get_by_uuid(self.context, inst1.uuid)
-        self.assertEqual(inst2.host, 'foo-host')
+        self.assertEqual('foo-host', inst2.host)
 
     def test_create_with_extras(self):
         inst = objects.Instance(context=self.context,
@@ -970,8 +969,8 @@ class _TestInstanceObject(object):
         inst = objects.Instance(context=self.context, id=1, uuid='fake-uuid',
                                 host='foo')
         inst.destroy()
-        self.assertEqual(timeutils.normalize_time(inst.deleted_at),
-                         timeutils.normalize_time(deleted_at))
+        self.assertEqual(timeutils.normalize_time(deleted_at),
+                         timeutils.normalize_time(inst.deleted_at))
         self.assertTrue(inst.deleted)
 
     def test_destroy(self):
@@ -1038,6 +1037,24 @@ class _TestInstanceObject(object):
         inst._from_db_object(self.context, inst, db_inst,
                              expected_attrs=['info_cache'])
         self.assertIs(info_cache, inst.info_cache)
+
+    def test_from_db_object_info_cache_not_set(self):
+        inst = instance.Instance(context=self.context,
+                                 info_cache=None)
+        db_inst = fake_instance.fake_db_instance()
+        db_inst.pop('info_cache')
+        inst._from_db_object(self.context, inst, db_inst,
+                             expected_attrs=['info_cache'])
+        self.assertIsNone(inst.info_cache)
+
+    def test_from_db_object_security_groups_net_set(self):
+        inst = instance.Instance(context=self.context,
+                                 info_cache=None)
+        db_inst = fake_instance.fake_db_instance()
+        db_inst.pop('security_groups')
+        inst._from_db_object(self.context, inst, db_inst,
+                             expected_attrs=['security_groups'])
+        self.assertEqual([], inst.security_groups.objects)
 
     @mock.patch('nova.objects.InstancePCIRequests.get_by_instance_uuid')
     def test_get_with_pci_requests(self, mock_get):
@@ -1199,6 +1216,21 @@ class _TestInstanceObject(object):
             update_extra.assert_called_once_with(self.context, inst.uuid,
                                                  {"migration_context": None})
 
+    def test_mutated_migration_context(self):
+        numa_topology = (test_instance_numa_topology.
+                            fake_obj_numa_topology.obj_clone())
+        numa_topology.cells[0].memory = 1024
+        numa_topology.cells[1].memory = 1024
+
+        inst = instance.Instance(context=self.context,
+                                 uuid='fake-uuid', numa_topology=numa_topology)
+        inst.migration_context = test_mig_ctxt.get_fake_migration_context_obj(
+            self.context)
+        with inst.mutated_migration_context():
+            self.assertIs(inst.numa_topology,
+                          inst.migration_context.new_numa_topology)
+        self.assertIs(numa_topology, inst.numa_topology)
+
     @mock.patch.object(objects.Instance, 'get_by_uuid')
     def test_load_generic(self, mock_get):
         inst2 = instance.Instance(metadata={'foo': 'bar'})
@@ -1245,14 +1277,18 @@ class _TestInstanceObject(object):
 
 class TestInstanceObject(test_objects._LocalTest,
                          _TestInstanceObject):
-    def test_save_objectfield_missing_instance_row(self):
+    def _test_save_objectfield_fk_constraint_fails(self, foreign_key,
+                                                   expected_exception):
         # NOTE(danms): Do this here and not in the remote test because
         # we're mocking out obj_attr_is_set() without the thing actually
         # being set, which confuses the heck out of the serialization
         # stuff.
-        error = db_exc.DBReferenceError('table', 'constraint', 'key',
+        error = db_exc.DBReferenceError('table', 'constraint', foreign_key,
                                         'key_table')
-        instance = fake_instance.fake_instance_obj(self.context)
+        # Prevent lazy-loading any fields, results in InstanceNotFound
+        attrs = objects.instance.INSTANCE_OPTIONAL_ATTRS
+        instance = fake_instance.fake_instance_obj(self.context,
+                                                   expected_attrs=attrs)
         fields_with_save_methods = [field for field in instance.fields
                                     if hasattr(instance, '_save_%s' % field)]
         for field in fields_with_save_methods:
@@ -1263,10 +1299,17 @@ class TestInstanceObject(test_objects._LocalTest,
                 mock_save_field.side_effect = error
                 instance.obj_reset_changes(fields=[field])
                 instance._changed_fields.add(field)
-                self.assertRaises(exception.InstanceNotFound,
-                                  instance.save)
+                self.assertRaises(expected_exception, instance.save)
                 instance.obj_reset_changes(fields=[field])
             _test()
+
+    def test_save_objectfield_missing_instance_row(self):
+        self._test_save_objectfield_fk_constraint_fails(
+                'instance_uuid', exception.InstanceNotFound)
+
+    def test_save_objectfield_reraises_if_not_instance_related(self):
+        self._test_save_objectfield_fk_constraint_fails(
+                'other_foreign_key', db_exc.DBReferenceError)
 
 
 class TestRemoteInstanceObject(test_objects._RemoteTest,
@@ -1397,7 +1440,7 @@ class _TestInstanceListObject(object):
 
         for i in range(0, len(fakes)):
             self.assertIsInstance(inst_list.objects[i], objects.Instance)
-            self.assertEqual(inst_list.objects[i].uuid, fakes[i]['uuid'])
+            self.assertEqual(fakes[i]['uuid'], inst_list.objects[i].uuid)
 
     def test_get_all_by_filters_sorted(self):
         fakes = [self.fake_instance(1), self.fake_instance(2)]
@@ -1415,7 +1458,7 @@ class _TestInstanceListObject(object):
 
         for i in range(0, len(fakes)):
             self.assertIsInstance(inst_list.objects[i], objects.Instance)
-            self.assertEqual(inst_list.objects[i].uuid, fakes[i]['uuid'])
+            self.assertEqual(fakes[i]['uuid'], inst_list.objects[i].uuid)
 
     @mock.patch.object(db, 'instance_get_all_by_filters_sort')
     @mock.patch.object(db, 'instance_get_all_by_filters')
@@ -1468,7 +1511,7 @@ class _TestInstanceListObject(object):
 
         self.assertEqual(1, len(inst_list))
         self.assertIsInstance(inst_list.objects[0], objects.Instance)
-        self.assertEqual(inst_list.objects[0].uuid, fakes[1]['uuid'])
+        self.assertEqual(fakes[1]['uuid'], inst_list.objects[0].uuid)
 
     def test_get_by_host(self):
         fakes = [self.fake_instance(1),
@@ -1481,9 +1524,9 @@ class _TestInstanceListObject(object):
         inst_list = objects.InstanceList.get_by_host(self.context, 'foo')
         for i in range(0, len(fakes)):
             self.assertIsInstance(inst_list.objects[i], objects.Instance)
-            self.assertEqual(inst_list.objects[i].uuid, fakes[i]['uuid'])
-            self.assertEqual(inst_list.objects[i]._context, self.context)
-        self.assertEqual(inst_list.obj_what_changed(), set())
+            self.assertEqual(fakes[i]['uuid'], inst_list.objects[i].uuid)
+            self.assertEqual(self.context, inst_list.objects[i]._context)
+        self.assertEqual(set(), inst_list.obj_what_changed())
 
     def test_get_by_host_and_node(self):
         fakes = [self.fake_instance(1),
@@ -1497,7 +1540,7 @@ class _TestInstanceListObject(object):
                                                               'foo', 'bar')
         for i in range(0, len(fakes)):
             self.assertIsInstance(inst_list.objects[i], objects.Instance)
-            self.assertEqual(inst_list.objects[i].uuid, fakes[i]['uuid'])
+            self.assertEqual(fakes[i]['uuid'], inst_list.objects[i].uuid)
 
     def test_get_by_host_and_not_type(self):
         fakes = [self.fake_instance(1),
@@ -1511,7 +1554,7 @@ class _TestInstanceListObject(object):
             self.context, 'foo', 'bar')
         for i in range(0, len(fakes)):
             self.assertIsInstance(inst_list.objects[i], objects.Instance)
-            self.assertEqual(inst_list.objects[i].uuid, fakes[i]['uuid'])
+            self.assertEqual(fakes[i]['uuid'], inst_list.objects[i].uuid)
 
     @mock.patch('nova.objects.instance._expected_cols')
     @mock.patch('nova.db.instance_get_all')
@@ -1525,7 +1568,7 @@ class _TestInstanceListObject(object):
                 self.context, columns_to_join=mock.sentinel.exp_att)
         for i in range(0, len(fakes)):
             self.assertIsInstance(inst_list.objects[i], objects.Instance)
-            self.assertEqual(inst_list.objects[i].uuid, fakes[i]['uuid'])
+            self.assertEqual(fakes[i]['uuid'], inst_list.objects[i].uuid)
 
     def test_get_hung_in_rebooting(self):
         fakes = [self.fake_instance(1),
@@ -1539,7 +1582,7 @@ class _TestInstanceListObject(object):
                                                                dt)
         for i in range(0, len(fakes)):
             self.assertIsInstance(inst_list.objects[i], objects.Instance)
-            self.assertEqual(inst_list.objects[i].uuid, fakes[i]['uuid'])
+            self.assertEqual(fakes[i]['uuid'], inst_list.objects[i].uuid)
 
     def test_get_active_by_window_joined(self):
         fakes = [self.fake_instance(1), self.fake_instance(2)]
@@ -1564,7 +1607,7 @@ class _TestInstanceListObject(object):
 
         for fake, obj in zip(fakes, inst_list.objects):
             self.assertIsInstance(obj, objects.Instance)
-            self.assertEqual(obj.uuid, fake['uuid'])
+            self.assertEqual(fake['uuid'], obj.uuid)
 
     def test_with_fault(self):
         fake_insts = [
@@ -1620,12 +1663,12 @@ class _TestInstanceListObject(object):
         inst_list._context = self.context
         inst_list.objects = insts
         faulty = inst_list.fill_faults()
-        self.assertEqual(list(faulty), ['uuid1'])
-        self.assertEqual(inst_list[0].fault.message,
-                         db_faults['uuid1'][0]['message'])
+        self.assertEqual(['uuid1'], list(faulty))
+        self.assertEqual(db_faults['uuid1'][0]['message'],
+                         inst_list[0].fault.message)
         self.assertIsNone(inst_list[1].fault)
         for inst in inst_list:
-            self.assertEqual(inst.obj_what_changed(), set())
+            self.assertEqual(set(), inst.obj_what_changed())
 
     def test_get_by_security_group(self):
         fake_secgroup = dict(test_security_group.fake_secgroup)

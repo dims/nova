@@ -771,8 +771,28 @@ def make_dev_path(dev, partition=None, base='/dev'):
     return path
 
 
-def sanitize_hostname(hostname):
-    """Return a hostname which conforms to RFC-952 and RFC-1123 specs."""
+def sanitize_hostname(hostname, default_name=None):
+    """Return a hostname which conforms to RFC-952 and RFC-1123 specs except
+       the length of hostname.
+
+       Window, Linux, and Dnsmasq has different limitation:
+
+       Windows: 255 (net_bios limits to 15, but window will truncate it)
+       Linux: 64
+       Dnsmasq: 63
+
+       Due to nova-network will leverage dnsmasq to set hostname, so we chose
+       63.
+
+       """
+
+    def truncate_hostname(name):
+        if len(name) > 63:
+            LOG.warning(_LW("Hostname %(hostname)s is longer than 63, "
+                            "truncate it to %(truncated_name)s"),
+                            {'hostname': name, 'truncated_name': name[:63]})
+        return name[:63]
+
     if isinstance(hostname, six.text_type):
         # Remove characters outside the Unicode range U+0000-U+00FF
         hostname = hostname.encode('latin-1', 'ignore')
@@ -783,8 +803,12 @@ def sanitize_hostname(hostname):
     hostname = re.sub('[^\w.-]+', '', hostname)
     hostname = hostname.lower()
     hostname = hostname.strip('.-')
+    # NOTE(eliqiao): set hostname to default_display_name to avoid
+    # empty hostname
+    if hostname == "" and default_name is not None:
+        return truncate_hostname(default_name)
 
-    return hostname
+    return truncate_hostname(hostname)
 
 
 @contextlib.contextmanager
@@ -984,10 +1008,10 @@ def last_bytes(file_like_object, num):
     return (file_like_object.read(), remaining)
 
 
-def metadata_to_dict(metadata, filter_deleted=False):
+def metadata_to_dict(metadata, include_deleted=False):
     result = {}
     for item in metadata:
-        if not filter_deleted and item.get('deleted'):
+        if not include_deleted and item.get('deleted'):
             continue
         result[item['key']] = item['value']
     return result
@@ -1014,7 +1038,7 @@ def instance_sys_meta(instance):
         return instance['system_metadata']
     else:
         return metadata_to_dict(instance['system_metadata'],
-                                filter_deleted=True)
+                                include_deleted=True)
 
 
 def get_wrapped_function(function):
@@ -1287,7 +1311,7 @@ def get_image_from_system_metadata(system_meta):
     properties = {}
 
     if not isinstance(system_meta, dict):
-        system_meta = metadata_to_dict(system_meta, filter_deleted=True)
+        system_meta = metadata_to_dict(system_meta, include_deleted=True)
 
     for key, value in six.iteritems(system_meta):
         if value is None:

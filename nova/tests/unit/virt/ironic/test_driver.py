@@ -244,11 +244,14 @@ class IronicDriverTestCase(test.NoDBTestCase):
                 FAKE_CLIENT, instance, 'fake message')
         self.assertTrue(fake_validate.called)
 
-    def test__node_resource(self):
+    def _test__node_resource(self, has_inst_info):
         node_uuid = uuidutils.generate_uuid()
         props = _get_properties()
         stats = _get_stats()
-        instance_info = _get_instance_info()
+        if has_inst_info:
+            instance_info = _get_instance_info()
+        else:
+            instance_info = {}
         node = ironic_utils.get_test_node(uuid=node_uuid,
                                           instance_uuid=self.instance_uuid,
                                           instance_info=instance_info,
@@ -269,15 +272,29 @@ class IronicDriverTestCase(test.NoDBTestCase):
         gotkeys = result.keys()
         gotkeys.sort()
         self.assertEqual(wantkeys, gotkeys)
-        self.assertEqual(instance_info['vcpus'], result['vcpus'])
-        self.assertEqual(instance_info['vcpus'], result['vcpus_used'])
-        self.assertEqual(instance_info['memory_mb'], result['memory_mb'])
-        self.assertEqual(instance_info['memory_mb'], result['memory_mb_used'])
-        self.assertEqual(instance_info['local_gb'], result['local_gb'])
-        self.assertEqual(instance_info['local_gb'], result['local_gb_used'])
+
+        if has_inst_info:
+            props_dict = instance_info
+            expected_cpus = instance_info['vcpus']
+        else:
+            props_dict = props
+            expected_cpus = props['cpus']
+        self.assertEqual(expected_cpus, result['vcpus'])
+        self.assertEqual(expected_cpus, result['vcpus_used'])
+        self.assertEqual(props_dict['memory_mb'], result['memory_mb'])
+        self.assertEqual(props_dict['memory_mb'], result['memory_mb_used'])
+        self.assertEqual(props_dict['local_gb'], result['local_gb'])
+        self.assertEqual(props_dict['local_gb'], result['local_gb_used'])
+
         self.assertEqual(node_uuid, result['hypervisor_hostname'])
         self.assertEqual(stats, jsonutils.loads(result['stats']))
         self.assertIsNone(result['numa_topology'])
+
+    def test__node_resource(self):
+        self._test__node_resource(True)
+
+    def test__node_resource_no_instance_info(self):
+        self._test__node_resource(False)
 
     def test__node_resource_canonicalizes_arch(self):
         node_uuid = uuidutils.generate_uuid()
@@ -433,17 +450,19 @@ class IronicDriverTestCase(test.NoDBTestCase):
 
     @mock.patch.object(ironic_driver.LOG, 'warning')
     def test__parse_node_instance_info(self, mock_warning):
+        props = _get_properties()
         instance_info = _get_instance_info()
         node = ironic_utils.get_test_node(
             uuid=uuidutils.generate_uuid(),
             instance_info=instance_info)
-        parsed = self.driver._parse_node_instance_info(node)
+        parsed = self.driver._parse_node_instance_info(node, props)
 
         self.assertEqual(instance_info, parsed)
         self.assertFalse(mock_warning.called)
 
     @mock.patch.object(ironic_driver.LOG, 'warning')
     def test__parse_node_instance_info_bad_values(self, mock_warning):
+        props = _get_properties()
         instance_info = _get_instance_info()
         instance_info['vcpus'] = 'bad-value'
         instance_info['memory_mb'] = 'bad-value'
@@ -451,9 +470,13 @@ class IronicDriverTestCase(test.NoDBTestCase):
         node = ironic_utils.get_test_node(
             uuid=uuidutils.generate_uuid(),
             instance_info=instance_info)
-        parsed = self.driver._parse_node_instance_info(node)
+        parsed = self.driver._parse_node_instance_info(node, props)
 
-        expected = {'vcpus': 0, 'memory_mb': 0, 'local_gb': 0}
+        expected = {
+            'vcpus': props['cpus'],
+            'memory_mb': props['memory_mb'],
+            'local_gb': props['local_gb']
+        }
         self.assertEqual(expected, parsed)
         self.assertEqual(3, mock_warning.call_count)
 
@@ -1135,12 +1158,12 @@ class IronicDriverTestCase(test.NoDBTestCase):
 
     @mock.patch.object(FAKE_CLIENT, 'node')
     @mock.patch.object(ironic_driver.IronicDriver, '_cleanup_deploy')
-    def test_destroy(self, mock_cleanup_deploy, mock_node):
+    def _test_destroy(self, state, mock_cleanup_deploy, mock_node):
         node_uuid = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
         network_info = 'foo'
 
         node = ironic_utils.get_test_node(driver='fake', uuid=node_uuid,
-                                          provision_state=ironic_states.ACTIVE)
+                                          provision_state=state)
         instance = fake_instance.fake_instance_obj(self.ctx, node=node_uuid)
 
         def fake_set_provision_state(*_):
@@ -1149,54 +1172,22 @@ class IronicDriverTestCase(test.NoDBTestCase):
         mock_node.get_by_instance_uuid.return_value = node
         mock_node.set_provision_state.side_effect = fake_set_provision_state
         self.driver.destroy(self.ctx, instance, network_info, None)
-        mock_node.set_provision_state.assert_called_once_with(node_uuid,
-                                                              'deleted')
+
         mock_node.get_by_instance_uuid.assert_called_with(instance.uuid)
         mock_cleanup_deploy.assert_called_with(self.ctx, node,
                                                instance, network_info)
 
-    @mock.patch.object(FAKE_CLIENT, 'node')
-    @mock.patch.object(ironic_driver.IronicDriver, '_cleanup_deploy')
-    def test_destroy_ignore_unexpected_state(self, mock_cleanup_deploy,
-                                             mock_node):
-        node_uuid = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
-        network_info = 'foo'
+        # For states that makes sense check if set_provision_state has
+        # been called
+        if state in ironic_driver._UNPROVISION_STATES:
+            mock_node.set_provision_state.assert_called_once_with(
+                node_uuid, 'deleted')
+        else:
+            self.assertFalse(mock_node.set_provision_state.called)
 
-        node = ironic_utils.get_test_node(driver='fake', uuid=node_uuid,
-                                        provision_state=ironic_states.DELETING)
-        instance = fake_instance.fake_instance_obj(self.ctx, node=node_uuid)
-
-        mock_node.get_by_instance_uuid.return_value = node
-        self.driver.destroy(self.ctx, instance, network_info, None)
-        self.assertFalse(mock_node.set_provision_state.called)
-        mock_node.get_by_instance_uuid.assert_called_with(instance.uuid)
-        mock_cleanup_deploy.assert_called_with(self.ctx, node, instance,
-                                               network_info)
-
-    @mock.patch.object(FAKE_CLIENT, 'node')
-    @mock.patch.object(ironic_driver.IronicDriver, '_cleanup_deploy')
-    def _test_destroy_cleaning(self, mock_cleanup_deploy, mock_node,
-                               state=None):
-        node_uuid = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
-        network_info = 'foo'
-
-        node = ironic_utils.get_test_node(
-            driver='fake', uuid=node_uuid,
-            provision_state=state)
-        instance = fake_instance.fake_instance_obj(self.ctx, node=node_uuid)
-
-        mock_node.get_by_instance_uuid.return_value = node
-        self.driver.destroy(self.ctx, instance, network_info, None)
-        self.assertFalse(mock_node.set_provision_state.called)
-        mock_node.get_by_instance_uuid.assert_called_with(instance.uuid)
-        mock_cleanup_deploy.assert_called_with(self.ctx, node, instance,
-                                               network_info)
-
-    def test_destroy_cleaning(self):
-        self._test_destroy_cleaning(state=ironic_states.CLEANING)
-
-    def test_destroy_cleanwait(self):
-        self._test_destroy_cleaning(state=ironic_states.CLEANWAIT)
+    def test_destroy(self):
+        for state in ironic_states.PROVISION_STATE_LIST:
+            self._test_destroy(state)
 
     @mock.patch.object(FAKE_CLIENT.node, 'set_provision_state')
     @mock.patch.object(ironic_driver, '_validate_instance_and_node')
