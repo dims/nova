@@ -5,6 +5,9 @@ env:
   - TOXENV=functional
   - TOXENV=pip-missing-reqs
 install:
+  - travis_retry pip install codecov
   - travis_retry pip install tox
 script:
   - travis_retry tox -- --concurrency=5
+after_success:
+    codecov
