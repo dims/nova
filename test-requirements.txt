@@ -23,7 +23,7 @@ pyzmq>=14.3.1 # LGPL+BSD
 tempest-lib>=0.9.0
 bandit>=0.13.2
 
--e git+https://github.com/dims/os-testr.git#egg=os-testr
+-e git+https://github.com/openstack/os-testr.git#egg=os-testr
 -e git+https://github.com/openstack/oslosphinx.git#egg=oslosphinx
 -e git+https://github.com/openstack/oslotest.git#egg=oslotest
 -e git+https://github.com/openstack/oslo.vmware.git#egg=oslo.vmware
