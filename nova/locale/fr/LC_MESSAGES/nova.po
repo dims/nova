@@ -27,14 +27,13 @@
 # Tom Cocozzello <tjcocozz@us.ibm.com>, 2015. #zanata
 msgid ""
 msgstr ""
-"Project-Id-Version: nova 13.0.0.dev147\n"
+"Project-Id-Version: nova 13.0.0.dev61\n"
 "Report-Msgid-Bugs-To: EMAIL@ADDRESS\n"
-"POT-Creation-Date: 2015-10-13 06:03+0000\n"
+"POT-Creation-Date: 2015-10-30 06:16+0000\n"
 "PO-Revision-Date: 2015-10-07 11:52+0000\n"
 "Last-Translator: Corinne Verheyde <cverheyd@gmail.com>\n"
 "Language: fr\n"
-"Language-Team: French (http://www.transifex.com/openstack/nova/language/"
-"fr/)\n"
+"Language-Team: French\n"
 "Plural-Forms: nplurals=2; plural=(n > 1)\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
@@ -1043,10 +1042,6 @@ msgstr "DNS1"
 
 msgid "DNS2"
 msgstr "DNS2"
-
-#, python-format
-msgid "Database migration failed: %(reason)s"
-msgstr "Echec de la migration de la base de donnée: %(reason)s"
 
 #, python-format
 msgid "Datastore regex %s did not match any datastores"

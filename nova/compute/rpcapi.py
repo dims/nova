@@ -308,6 +308,9 @@ class ComputeAPI(object):
         ... Liberty supports messaging version 4.5. So, any changes to
         existing methods in 4.x after that point should be done so that they
         can handle the version_cap being set to 4.5
+
+        * ...  - Remove refresh_security_group_members()
+        * ...  - Remove refresh_security_group_rules()
     '''
 
     VERSION_ALIASES = {
@@ -961,19 +964,6 @@ class ComputeAPI(object):
                 version=version)
         cctxt.cast(ctxt, 'unquiesce_instance', instance=instance,
                    mapping=mapping)
-
-    def refresh_security_group_rules(self, ctxt, security_group_id, host):
-        version = '4.0'
-        cctxt = self.client.prepare(server=host, version=version)
-        cctxt.cast(ctxt, 'refresh_security_group_rules',
-                   security_group_id=security_group_id)
-
-    def refresh_security_group_members(self, ctxt, security_group_id,
-            host):
-        version = '4.0'
-        cctxt = self.client.prepare(server=host, version=version)
-        cctxt.cast(ctxt, 'refresh_security_group_members',
-                   security_group_id=security_group_id)
 
     def refresh_instance_security_rules(self, ctxt, host, instance):
         version = '4.4'

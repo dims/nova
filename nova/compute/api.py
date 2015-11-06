@@ -1282,15 +1282,22 @@ class API(base.Base):
 
     def _validate_bdm(self, context, instance, instance_type, all_mappings):
         def _subsequent_list(l):
+            # Each device which is capable of being used as boot device should
+            # be given a unique boot index, starting from 0 in ascending order.
             return all(el + 1 == l[i + 1] for i, el in enumerate(l[:-1]))
 
-        # Make sure that the boot indexes make sense
+        # Make sure that the boot indexes make sense.
+        # Setting a negative value or None indicates that the device should not
+        # be used for booting.
         boot_indexes = sorted([bdm.boot_index
                                for bdm in all_mappings
                                if bdm.boot_index is not None
                                and bdm.boot_index >= 0])
 
         if 0 not in boot_indexes or not _subsequent_list(boot_indexes):
+            # Convert the BlockDeviceMappingList to a list for repr details.
+            LOG.debug('Invalid block device mapping boot sequence for '
+                      'instance: %s', list(all_mappings), instance=instance)
             raise exception.InvalidBDMBootSequence()
 
         for bdm in all_mappings:
@@ -4041,10 +4048,9 @@ class SecurityGroupAPI(base.Base, security_group_base.SecurityGroupBase):
         self.db.instance_add_security_group(context.elevated(),
                                             instance_uuid,
                                             security_group['id'])
-        # NOTE(comstud): No instance_uuid argument to this compute manager
-        # call
-        self.compute_rpcapi.refresh_security_group_rules(context,
-                security_group['id'], host=instance.host)
+        if instance.host:
+            self.compute_rpcapi.refresh_instance_security_rules(
+                    context, instance.host, instance)
 
     @wrap_check_security_groups_policy
     def remove_from_instance(self, context, instance, security_group_name):
@@ -4064,10 +4070,9 @@ class SecurityGroupAPI(base.Base, security_group_base.SecurityGroupBase):
         self.db.instance_remove_security_group(context.elevated(),
                                                instance_uuid,
                                                security_group['id'])
-        # NOTE(comstud): No instance_uuid argument to this compute manager
-        # call
-        self.compute_rpcapi.refresh_security_group_rules(context,
-                security_group['id'], host=instance.host)
+        if instance.host:
+            self.compute_rpcapi.refresh_instance_security_rules(
+                    context, instance.host, instance)
 
     def get_rule(self, context, id):
         self.ensure_default(context)

@@ -71,18 +71,6 @@ class ImageMeta(base.NovaObject):
         'properties': fields.ObjectField('ImageMetaProps'),
     }
 
-    obj_relationships = {
-        'properties': [('1.0', '1.0'),
-                       ('1.1', '1.1'),
-                       ('1.2', '1.2'),
-                       ('1.3', '1.3'),
-                       ('1.4', '1.4'),
-                       ('1.5', '1.5'),
-                       ('1.6', '1.6'),
-                       ('1.7', '1.7'),
-                       ],
-    }
-
     @classmethod
     def from_dict(cls, image_meta):
         """Create instance from image metadata dict
@@ -389,7 +377,7 @@ class ImageMetaProps(base.NovaObject):
         vmware_adaptertype = image_props.get("vmware_adaptertype")
         if vmware_adaptertype == "ide":
             setattr(self, "hw_disk_bus", "ide")
-        elif vmware_adaptertype is not None:
+        elif vmware_adaptertype:
             setattr(self, "hw_disk_bus", "scsi")
             setattr(self, "hw_scsi_model", vmware_adaptertype)
 

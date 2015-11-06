@@ -1347,6 +1347,8 @@ class ComputeManager(manager.Manager):
     def get_console_pool_info(self, context, console_type):
         return self.driver.get_console_pool_info(console_type)
 
+    # NOTE(hanlind): This and the virt method it calls can be removed in
+    # version 5.0 of the RPC API
     @wrap_exception()
     def refresh_security_group_rules(self, context, security_group_id):
         """Tell the virtualization driver to refresh security group rules.
@@ -1355,15 +1357,6 @@ class ComputeManager(manager.Manager):
 
         """
         return self.driver.refresh_security_group_rules(security_group_id)
-
-    @wrap_exception()
-    def refresh_security_group_members(self, context, security_group_id):
-        """Tell the virtualization driver to refresh security group members.
-
-        Passes straight through to the virtualization driver.
-
-        """
-        return self.driver.refresh_security_group_members(security_group_id)
 
     @object_compat
     @wrap_exception()
@@ -1696,12 +1689,12 @@ class ComputeManager(manager.Manager):
         if update_root_bdm:
             root_bdm.save()
 
-        ephemerals = filter(block_device.new_format_is_ephemeral,
-                            block_devices)
-        swap = filter(block_device.new_format_is_swap,
-                      block_devices)
-        block_device_mapping = filter(
-              driver_block_device.is_block_device_mapping, block_devices)
+        ephemerals = list(filter(block_device.new_format_is_ephemeral,
+                            block_devices))
+        swap = list(filter(block_device.new_format_is_swap,
+                      block_devices))
+        block_device_mapping = list(filter(
+              driver_block_device.is_block_device_mapping, block_devices))
 
         self._default_device_names_for_instance(instance,
                                                 root_device_name,
@@ -1769,7 +1762,7 @@ class ComputeManager(manager.Manager):
         """
         if not self.send_instance_updates:
             return
-        if isinstance(instance, obj_instance._BaseInstance):
+        if isinstance(instance, obj_instance.Instance):
             instance = objects.InstanceList(objects=[instance])
         context = context.elevated()
         self.scheduler_client.update_instance_info(context, self.host,
@@ -4381,6 +4374,10 @@ class ComputeManager(manager.Manager):
                   instance=instance)
         output = self.driver.get_console_output(context, instance)
 
+        if type(output) is six.text_type:
+            # the console output will be bytes.
+            output = six.b(output)
+
         if tail_length is not None:
             output = self._tail_log(output, tail_length)
 
@@ -4393,9 +4390,9 @@ class ComputeManager(manager.Manager):
             length = 0
 
         if length == 0:
-            return ''
+            return b''
         else:
-            return '\n'.join(log.split('\n')[-int(length):])
+            return b'\n'.join(log.split(b'\n')[-int(length):])
 
     @messaging.expected_exceptions(exception.ConsoleTypeInvalid,
                                    exception.InstanceNotReady,
@@ -5470,18 +5467,27 @@ class ComputeManager(manager.Manager):
         self._notify_about_instance_usage(
                       context, instance, "live_migration.rollback.dest.start",
                       network_info=network_info)
+        try:
+            # NOTE(tr3buchet): tear down networks on destination host
+            self.network_api.setup_networks_on_host(context, instance,
+                                                    self.host, teardown=True)
+        except Exception:
+            with excutils.save_and_reraise_exception():
+                # NOTE(tdurakov): even if teardown networks fails driver
+                # should try to rollback live migration on destination.
+                LOG.exception(
+                    _LE('An error occurred while deallocating network.'),
+                    instance=instance)
+        finally:
+            # always run this even if setup_networks_on_host fails
+            # NOTE(vish): The mapping is passed in so the driver can disconnect
+            #             from remote volumes if necessary
+            block_device_info = self._get_instance_block_device_info(context,
+                                                                     instance)
+            self.driver.rollback_live_migration_at_destination(
+                context, instance, network_info, block_device_info,
+                destroy_disks=destroy_disks, migrate_data=migrate_data)
 
-        # NOTE(tr3buchet): tear down networks on destination host
-        self.network_api.setup_networks_on_host(context, instance,
-                                                self.host, teardown=True)
-
-        # NOTE(vish): The mapping is passed in so the driver can disconnect
-        #             from remote volumes if necessary
-        block_device_info = self._get_instance_block_device_info(context,
-                                                                 instance)
-        self.driver.rollback_live_migration_at_destination(
-                        context, instance, network_info, block_device_info,
-                        destroy_disks=destroy_disks, migrate_data=migrate_data)
         self._notify_about_instance_usage(
                         context, instance, "live_migration.rollback.dest.end",
                         network_info=network_info)

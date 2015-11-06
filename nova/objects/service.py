@@ -100,13 +100,6 @@ class Service(base.NovaPersistentObject, base.NovaObject,
         'version': fields.IntegerField(),
     }
 
-    obj_relationships = {
-        'compute_node': [('1.1', '1.4'), ('1.3', '1.5'), ('1.5', '1.6'),
-                         ('1.7', '1.8'), ('1.8', '1.9'), ('1.9', '1.10'),
-                         ('1.12', '1.11'), ('1.15', '1.12'), ('1.17', '1.13'),
-                         ('1.18', '1.14')],
-    }
-
     def __init__(self, *args, **kwargs):
         # NOTE(danms): We're going against the rules here and overriding
         # init. The reason is that we want to *ensure* that we're always
@@ -125,8 +118,10 @@ class Service(base.NovaPersistentObject, base.NovaObject,
         super(Service, self).__init__(*args, **kwargs)
         self.version = SERVICE_VERSION
 
-    def obj_make_compatible(self, primitive, target_version):
-        super(Service, self).obj_make_compatible(primitive, target_version)
+    def obj_make_compatible_from_manifest(self, primitive, target_version,
+                                          version_manifest):
+        super(Service, self).obj_make_compatible_from_manifest(
+            primitive, target_version, version_manifest)
         _target_version = utils.convert_version_to_tuple(target_version)
         if _target_version < (1, 16) and 'version' in primitive:
             del primitive['version']
@@ -135,15 +130,14 @@ class Service(base.NovaPersistentObject, base.NovaObject,
         if _target_version < (1, 13) and 'last_seen_up' in primitive:
             del primitive['last_seen_up']
         if _target_version < (1, 10):
-            target_compute_version = self.obj_calculate_child_version(
-                target_version, 'compute_node')
             # service.compute_node was not lazy-loaded, we need to provide it
             # when called
             self._do_compute_node(self._context, primitive,
-                                  target_compute_version)
+                                  version_manifest)
 
-    def _do_compute_node(self, context, primitive, target_version):
+    def _do_compute_node(self, context, primitive, version_manifest):
         try:
+            target_version = version_manifest['ComputeNode']
             # NOTE(sbauza): Some drivers (VMware, Ironic) can have multiple
             # nodes for the same service, but for keeping same behaviour,
             # returning only the first elem of the list
@@ -152,7 +146,8 @@ class Service(base.NovaPersistentObject, base.NovaObject,
         except Exception:
             return
         primitive['compute_node'] = compute.obj_to_primitive(
-            target_version=target_version)
+            target_version=target_version,
+            version_manifest=version_manifest)
 
     @staticmethod
     def _from_db_object(context, service, db_service):
@@ -324,15 +319,6 @@ class ServiceList(base.ObjectListBase, base.NovaObject):
     fields = {
         'objects': fields.ListOfObjectsField('Service'),
         }
-    # NOTE(danms): Service was at 1.2 before we added this
-    obj_relationships = {
-        'objects': [('1.0', '1.2'), ('1.1', '1.3'), ('1.2', '1.4'),
-                    ('1.3', '1.5'), ('1.4', '1.6'), ('1.5', '1.7'),
-                    ('1.6', '1.8'), ('1.7', '1.9'), ('1.8', '1.10'),
-                    ('1.9', '1.11'), ('1.10', '1.12'), ('1.11', '1.13'),
-                    ('1.12', '1.14'), ('1.13', '1.15'), ('1.14', '1.16'),
-                    ('1.15', '1.17'), ('1.16', '1.18'), ('1.17', '1.19')],
-    }
 
     @base.remotable_classmethod
     def get_by_topic(cls, context, topic):
