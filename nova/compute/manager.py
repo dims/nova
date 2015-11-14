@@ -2181,12 +2181,14 @@ class ComputeManager(manager.Manager):
                     self._shutdown_instance(context, instance,
                             block_device_mapping, requested_networks,
                             try_deallocate_networks=deallocate_networks)
-                except Exception:
+                except Exception as exc2:
                     ctxt.reraise = False
-                    msg = _('Could not clean up failed build,'
-                            ' not rescheduling')
+                    LOG.warning(_LW('Could not clean up failed build,'
+                                    ' not rescheduling. Error: %s'),
+                                six.text_type(exc2))
                     raise exception.BuildAbortException(
-                            instance_uuid=instance.uuid, reason=msg)
+                            instance_uuid=instance.uuid,
+                            reason=six.text_type(exc))
 
     def _cleanup_allocated_networks(self, context, instance,
             requested_networks):
@@ -5720,6 +5722,7 @@ class ComputeManager(manager.Manager):
             return
 
         filters = {'vm_state': vm_states.SHELVED,
+                   'task_state': None,
                    'host': self.host}
         shelved_instances = objects.InstanceList.get_by_filters(
             context, filters=filters, expected_attrs=['system_metadata'],
@@ -5735,7 +5738,7 @@ class ComputeManager(manager.Manager):
         for instance in to_gc:
             try:
                 instance.task_state = task_states.SHELVING_OFFLOADING
-                instance.save()
+                instance.save(expected_task_state=(None,))
                 self.shelve_offload_instance(context, instance,
                                              clean_shutdown=False)
             except Exception:

@@ -248,7 +248,7 @@ def check_policy(context, action, target, scope='compute'):
 
 def check_instance_cell(fn):
     def _wrapped(self, context, instance, *args, **kwargs):
-        self._validate_cell(instance, fn.__name__)
+        self._validate_cell(instance)
         return fn(self, context, instance, *args, **kwargs)
     _wrapped.__name__ = fn.__name__
     return _wrapped
@@ -302,7 +302,7 @@ class API(base.Base):
             self._cell_type = cells_opts.get_cell_type()
             return self._cell_type
 
-    def _validate_cell(self, instance, method):
+    def _validate_cell(self, instance):
         if self.cell_type != 'api':
             return
         cell_name = instance.cell_name
@@ -1269,7 +1269,7 @@ class API(base.Base):
         This method makes a copy of the list in order to avoid using the same
         id field in case this is called for multiple instances.
         """
-        LOG.debug("block_device_mapping %s", block_device_mapping,
+        LOG.debug("block_device_mapping %s", list(block_device_mapping),
                   instance_uuid=instance_uuid)
         instance_block_device_mapping = copy.deepcopy(block_device_mapping)
         for bdm in instance_block_device_mapping:
@@ -2347,6 +2347,8 @@ class API(base.Base):
                 #                 Linux LVM snapshot creation completes in
                 #                 short time, it doesn't matter for now.
                 name = _('snapshot for %s') % image_meta['name']
+                LOG.debug('Creating snapshot from volume %s.', volume['id'],
+                          instance=instance)
                 snapshot = self.volume_api.create_snapshot_force(
                     context, volume['id'], name, volume['display_description'])
                 mapping_dict = block_device.snapshot_from_bdm(snapshot['id'],
@@ -3230,18 +3232,6 @@ class API(base.Base):
                                                      instance=instance,
                                                      diff=diff)
         return _metadata
-
-    def get_instance_faults(self, context, instances):
-        """Get all faults for a list of instance uuids."""
-
-        if not instances:
-            return {}
-
-        for instance in instances:
-            check_policy(context, 'get_instance_faults', instance)
-
-        uuids = [instance.uuid for instance in instances]
-        return self.db.instance_fault_get_by_instance_uuids(context, uuids)
 
     def _get_root_bdm(self, context, instance, bdms=None):
         if bdms is None:

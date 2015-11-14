@@ -5975,26 +5975,52 @@ class BlockDeviceMappingTestCase(test.TestCase):
         self.assertEqual(bdm_real['guest_format'], 'swap')
         db.block_device_mapping_destroy(self.ctxt, bdm_real['id'])
 
-    def test_block_device_mapping_get_all_by_instance(self):
+    def test_block_device_mapping_get_all_by_instance_uuids(self):
         uuid1 = self.instance['uuid']
         uuid2 = db.instance_create(self.ctxt, {})['uuid']
 
-        bmds_values = [{'instance_uuid': uuid1,
+        bdms_values = [{'instance_uuid': uuid1,
                         'device_name': '/dev/vda'},
                        {'instance_uuid': uuid2,
                         'device_name': '/dev/vdb'},
                        {'instance_uuid': uuid2,
                         'device_name': '/dev/vdc'}]
 
-        for bdm in bmds_values:
+        for bdm in bdms_values:
             self._create_bdm(bdm)
 
-        bmd = db.block_device_mapping_get_all_by_instance(self.ctxt, uuid1)
-        self.assertEqual(len(bmd), 1)
-        self.assertEqual(bmd[0]['device_name'], '/dev/vda')
+        bdms = db.block_device_mapping_get_all_by_instance_uuids(
+            self.ctxt, [])
+        self.assertEqual(len(bdms), 0)
 
-        bmd = db.block_device_mapping_get_all_by_instance(self.ctxt, uuid2)
-        self.assertEqual(len(bmd), 2)
+        bdms = db.block_device_mapping_get_all_by_instance_uuids(
+            self.ctxt, [uuid2])
+        self.assertEqual(len(bdms), 2)
+
+        bdms = db.block_device_mapping_get_all_by_instance_uuids(
+            self.ctxt, [uuid1, uuid2])
+        self.assertEqual(len(bdms), 3)
+
+    def test_block_device_mapping_get_all_by_instance(self):
+        uuid1 = self.instance['uuid']
+        uuid2 = db.instance_create(self.ctxt, {})['uuid']
+
+        bdms_values = [{'instance_uuid': uuid1,
+                        'device_name': '/dev/vda'},
+                       {'instance_uuid': uuid2,
+                        'device_name': '/dev/vdb'},
+                       {'instance_uuid': uuid2,
+                        'device_name': '/dev/vdc'}]
+
+        for bdm in bdms_values:
+            self._create_bdm(bdm)
+
+        bdms = db.block_device_mapping_get_all_by_instance(self.ctxt, uuid1)
+        self.assertEqual(len(bdms), 1)
+        self.assertEqual(bdms[0]['device_name'], '/dev/vda')
+
+        bdms = db.block_device_mapping_get_all_by_instance(self.ctxt, uuid2)
+        self.assertEqual(len(bdms), 2)
 
     def test_block_device_mapping_destroy(self):
         bdm = self._create_bdm({})
@@ -8081,7 +8107,7 @@ class Ec2TestCase(test.TestCase):
                           self.ctxt, 100500)
 
 
-class ArchiveTestCase(test.TestCase):
+class ArchiveTestCase(test.TestCase, ModelsObjectComparatorMixin):
 
     def setUp(self):
         super(ArchiveTestCase, self).setUp()
@@ -8166,7 +8192,9 @@ class ArchiveTestCase(test.TestCase):
         # Verify we have 0 in shadow
         self.assertEqual(len(rows), 0)
         # Archive 2 rows
-        db.archive_deleted_rows(max_rows=2)
+        results = db.archive_deleted_rows(max_rows=2)
+        expected = dict(instance_id_mappings=2)
+        self._assertEqualObjects(expected, results)
         rows = self.conn.execute(qiim).fetchall()
         # Verify we have 4 left in main
         self.assertEqual(len(rows), 4)
@@ -8174,7 +8202,9 @@ class ArchiveTestCase(test.TestCase):
         # Verify we have 2 in shadow
         self.assertEqual(len(rows), 2)
         # Archive 2 more rows
-        db.archive_deleted_rows(max_rows=2)
+        results = db.archive_deleted_rows(max_rows=2)
+        expected = dict(instance_id_mappings=2)
+        self._assertEqualObjects(expected, results)
         rows = self.conn.execute(qiim).fetchall()
         # Verify we have 2 left in main
         self.assertEqual(len(rows), 2)
@@ -8182,7 +8212,9 @@ class ArchiveTestCase(test.TestCase):
         # Verify we have 4 in shadow
         self.assertEqual(len(rows), 4)
         # Try to archive more, but there are no deleted rows left.
-        db.archive_deleted_rows(max_rows=2)
+        results = db.archive_deleted_rows(max_rows=2)
+        expected = dict()
+        self._assertEqualObjects(expected, results)
         rows = self.conn.execute(qiim).fetchall()
         # Verify we still have 2 left in main
         self.assertEqual(len(rows), 2)

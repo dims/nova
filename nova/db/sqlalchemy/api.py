@@ -2648,6 +2648,7 @@ def instance_remove_security_group(context, instance_uuid, security_group_id):
 
 
 @require_context
+@main_context_manager.reader
 def instance_info_cache_get(context, instance_uuid):
     """Gets an instance info cache from the table.
 
@@ -2659,6 +2660,7 @@ def instance_info_cache_get(context, instance_uuid):
 
 
 @require_context
+@main_context_manager.writer
 def instance_info_cache_update(context, instance_uuid, values):
     """Update an instance info cache record in the table.
 
@@ -2667,33 +2669,31 @@ def instance_info_cache_update(context, instance_uuid, values):
     """
     convert_objects_related_datetimes(values)
 
-    session = get_session()
-    with session.begin():
-        info_cache = model_query(context, models.InstanceInfoCache,
-                                 session=session).\
-                         filter_by(instance_uuid=instance_uuid).\
-                         first()
-        if info_cache and info_cache['deleted']:
-            raise exception.InstanceInfoCacheNotFound(
-                    instance_uuid=instance_uuid)
-        elif not info_cache:
-            # NOTE(tr3buchet): just in case someone blows away an instance's
-            #                  cache entry, re-create it.
-            info_cache = models.InstanceInfoCache()
-            values['instance_uuid'] = instance_uuid
+    info_cache = model_query(context, models.InstanceInfoCache).\
+                     filter_by(instance_uuid=instance_uuid).\
+                     first()
+    if info_cache and info_cache['deleted']:
+        raise exception.InstanceInfoCacheNotFound(
+                instance_uuid=instance_uuid)
+    elif not info_cache:
+        # NOTE(tr3buchet): just in case someone blows away an instance's
+        #                  cache entry, re-create it.
+        info_cache = models.InstanceInfoCache()
+        values['instance_uuid'] = instance_uuid
 
-        try:
-            info_cache.update(values)
-        except db_exc.DBDuplicateEntry:
-            # NOTE(sirp): Possible race if two greenthreads attempt to
-            # recreate the instance cache entry at the same time. First one
-            # wins.
-            pass
+    try:
+        info_cache.update(values)
+    except db_exc.DBDuplicateEntry:
+        # NOTE(sirp): Possible race if two greenthreads attempt to
+        # recreate the instance cache entry at the same time. First one
+        # wins.
+        pass
 
     return info_cache
 
 
 @require_context
+@main_context_manager.writer
 def instance_info_cache_delete(context, instance_uuid):
     """Deletes an existing instance_info_cache record
 
@@ -2710,10 +2710,11 @@ def instance_info_cache_delete(context, instance_uuid):
 def _instance_extra_create(context, values):
     inst_extra_ref = models.InstanceExtra()
     inst_extra_ref.update(values)
-    inst_extra_ref.save()
+    inst_extra_ref.save(context.session)
     return inst_extra_ref
 
 
+@main_context_manager.writer
 def instance_extra_update_by_uuid(context, instance_uuid, values):
     rows_updated = model_query(context, models.InstanceExtra).\
         filter_by(instance_uuid=instance_uuid).\
@@ -2727,6 +2728,7 @@ def instance_extra_update_by_uuid(context, instance_uuid, values):
     return rows_updated
 
 
+@main_context_manager.reader
 def instance_extra_get_by_instance_uuid(context, instance_uuid,
                                         columns=None):
     query = model_query(context, models.InstanceExtra).\
@@ -2744,17 +2746,19 @@ def instance_extra_get_by_instance_uuid(context, instance_uuid,
 
 
 @require_context
+@main_context_manager.writer
 def key_pair_create(context, values):
     try:
         key_pair_ref = models.KeyPair()
         key_pair_ref.update(values)
-        key_pair_ref.save()
+        key_pair_ref.save(session=context.session)
         return key_pair_ref
     except db_exc.DBDuplicateEntry:
         raise exception.KeyPairExists(key_name=values['name'])
 
 
 @require_context
+@main_context_manager.writer
 def key_pair_destroy(context, user_id, name):
     result = model_query(context, models.KeyPair).\
                          filter_by(user_id=user_id).\
@@ -2765,6 +2769,7 @@ def key_pair_destroy(context, user_id, name):
 
 
 @require_context
+@main_context_manager.reader
 def key_pair_get(context, user_id, name):
     result = model_query(context, models.KeyPair).\
                      filter_by(user_id=user_id).\
@@ -2778,6 +2783,7 @@ def key_pair_get(context, user_id, name):
 
 
 @require_context
+@main_context_manager.reader
 def key_pair_get_all_by_user(context, user_id):
     return model_query(context, models.KeyPair, read_deleted="no").\
                    filter_by(user_id=user_id).\
@@ -2785,6 +2791,7 @@ def key_pair_get_all_by_user(context, user_id):
 
 
 @require_context
+@main_context_manager.reader
 def key_pair_count_by_user(context, user_id):
     return model_query(context, models.KeyPair, read_deleted="no").\
                    filter_by(user_id=user_id).\
@@ -3958,6 +3965,18 @@ def block_device_mapping_update_or_create(context, values, legacy=True):
 
 
 @require_context
+def block_device_mapping_get_all_by_instance_uuids(context, instance_uuids,
+                                                   use_slave=False):
+    if not instance_uuids:
+        return []
+    return _block_device_mapping_get_query(
+        context, use_slave=use_slave
+    ).filter(
+        models.BlockDeviceMapping.instance_uuid.in_(instance_uuids)
+    ).all()
+
+
+@require_context
 def block_device_mapping_get_all_by_instance(context, instance_uuid,
                                              use_slave=False):
     return _block_device_mapping_get_query(context, use_slave=use_slave).\
@@ -4922,36 +4941,36 @@ def flavor_extra_specs_update_or_create(context, flavor_id, specs,
 ####################
 
 
+@main_context_manager.writer
 def cell_create(context, values):
     cell = models.Cell()
     cell.update(values)
     try:
-        cell.save()
+        cell.save(session=context.session)
     except db_exc.DBDuplicateEntry:
         raise exception.CellExists(name=values['name'])
     return cell
 
 
-def _cell_get_by_name_query(context, cell_name, session=None):
-    return model_query(context, models.Cell,
-                       session=session).filter_by(name=cell_name)
+def _cell_get_by_name_query(context, cell_name):
+    return model_query(context, models.Cell).filter_by(name=cell_name)
 
 
+@main_context_manager.writer
 def cell_update(context, cell_name, values):
-    session = get_session()
-    with session.begin():
-        cell_query = _cell_get_by_name_query(context, cell_name,
-                                             session=session)
-        if not cell_query.update(values):
-            raise exception.CellNotFound(cell_name=cell_name)
-        cell = cell_query.first()
+    cell_query = _cell_get_by_name_query(context, cell_name)
+    if not cell_query.update(values):
+        raise exception.CellNotFound(cell_name=cell_name)
+    cell = cell_query.first()
     return cell
 
 
+@main_context_manager.writer
 def cell_delete(context, cell_name):
     return _cell_get_by_name_query(context, cell_name).soft_delete()
 
 
+@main_context_manager.reader
 def cell_get(context, cell_name):
     result = _cell_get_by_name_query(context, cell_name).first()
     if not result:
@@ -4959,6 +4978,7 @@ def cell_get(context, cell_name):
     return result
 
 
+@main_context_manager.reader
 def cell_get_all(context):
     return model_query(context, models.Cell, read_deleted="no").all()
 
@@ -6025,19 +6045,34 @@ def archive_deleted_rows(max_rows=None):
     """Move up to max_rows rows from production tables to the corresponding
     shadow tables.
 
-    :returns: Number of rows archived.
+    :returns: dict that maps table name to number of rows archived from that
+              table, for example:
+
+    ::
+
+        {
+            'instances': 5,
+            'block_device_mapping': 5,
+            'pci_devices': 2,
+        }
+
     """
+    table_to_rows_archived = {}
     tablenames = []
     for model_class in six.itervalues(models.__dict__):
         if hasattr(model_class, "__tablename__"):
             tablenames.append(model_class.__tablename__)
-    rows_archived = 0
+    total_rows_archived = 0
     for tablename in tablenames:
-        rows_archived += _archive_deleted_rows_for_table(tablename,
-                                         max_rows=max_rows - rows_archived)
-        if rows_archived >= max_rows:
+        rows_archived = _archive_deleted_rows_for_table(
+            tablename, max_rows=max_rows - total_rows_archived)
+        total_rows_archived += rows_archived
+        # Only report results for tables that had updates.
+        if rows_archived:
+            table_to_rows_archived[tablename] = rows_archived
+        if total_rows_archived >= max_rows:
             break
-    return rows_archived
+    return table_to_rows_archived
 
 
 ####################
