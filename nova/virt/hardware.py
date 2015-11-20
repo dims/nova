@@ -166,7 +166,7 @@ def get_number_of_serial_ports(flavor, image_meta):
     :param image_meta: nova.objects.ImageMeta object instance
 
     If flavor extra specs is not set, then any image meta value is permitted.
-    If flavour extra specs *is* set, then this provides the default serial
+    If flavor extra specs *is* set, then this provides the default serial
     port count. The image meta is permitted to override the extra specs, but
     *only* with a lower value. ie
 
@@ -958,6 +958,11 @@ def _numa_get_constraints_manual(nodes, flavor, cpu_list, mem_list):
     return objects.InstanceNUMATopology(cells=cells)
 
 
+def is_realtime_enabled(flavor):
+    flavor_rt = flavor.get('extra_specs', {}).get("hw:cpu_realtime")
+    return strutils.bool_from_string(flavor_rt)
+
+
 def _numa_get_constraints_auto(nodes, flavor):
     if ((flavor.vcpus % nodes) > 0 or
         (flavor.memory_mb % nodes) > 0):
@@ -987,6 +992,11 @@ def _add_cpu_pinning_constraint(flavor, image_meta, numa_topology):
         requested = False
     else:
         requested = image_pinning == "dedicated"
+
+    rt = is_realtime_enabled(flavor)
+    pi = image_pinning or flavor_pinning
+    if rt and pi != "dedicated":
+        raise exception.RealtimeConfigurationInvalid()
 
     if not requested:
         return numa_topology
@@ -1241,7 +1251,7 @@ def host_topology_and_format_from_host(host):
     get beck either None, or an instance of objects.NUMATopology class.
 
     :returns: A two-tuple, first element is the topology itself or None, second
-              is a boolean set to True if topology was in json format.
+              is a boolean set to True if topology was in JSON format.
     """
     was_json = False
     try:

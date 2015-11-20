@@ -679,26 +679,30 @@ def compute_node_statistics(context):
 ###################
 
 
+@main_context_manager.writer
 def certificate_create(context, values):
     certificate_ref = models.Certificate()
     for (key, value) in values.items():
         certificate_ref[key] = value
-    certificate_ref.save()
+    certificate_ref.save(context.session)
     return certificate_ref
 
 
+@main_context_manager.reader
 def certificate_get_all_by_project(context, project_id):
     return model_query(context, models.Certificate, read_deleted="no").\
                    filter_by(project_id=project_id).\
                    all()
 
 
+@main_context_manager.reader
 def certificate_get_all_by_user(context, user_id):
     return model_query(context, models.Certificate, read_deleted="no").\
                    filter_by(user_id=user_id).\
                    all()
 
 
+@main_context_manager.reader
 def certificate_get_all_by_user_and_project(context, user_id, project_id):
     return model_query(context, models.Certificate, read_deleted="no").\
                    filter_by(user_id=user_id).\
@@ -2044,6 +2048,8 @@ def instance_get_all_by_filters_sort(context, filters, limit=None, marker=None,
     # Filter the query
     query_prefix = _exact_instance_filter(query_prefix,
                                 filters, exact_match_filter_names)
+    if query_prefix is None:
+        return []
     query_prefix = _regex_instance_filter(query_prefix, filters)
     query_prefix = _tag_instance_filter(context, query_prefix, filters)
 
@@ -2208,6 +2214,8 @@ def _exact_instance_filter(query, filters, legal_keys):
                     query = query.filter(column_attr.any(key=k))
                     query = query.filter(column_attr.any(value=v))
         elif isinstance(value, (list, tuple, set, frozenset)):
+            if not value:
+                return None  # empty IN-predicate; short circuit
             # Looking for values in a list; apply to query directly
             column_attr = getattr(model, key)
             query = query.filter(column_attr.in_(value))
@@ -2389,6 +2397,8 @@ def instance_get_all_by_host_and_not_type(context, host, type_id=None):
 
 
 def instance_get_all_by_grantee_security_groups(context, group_ids):
+    if not group_ids:
+        return []
     return _instances_fill_metadata(context,
         _instance_get_all_query(context).
             join(models.Instance.security_groups).
@@ -3503,11 +3513,11 @@ def _calculate_overquota(project_quotas, user_quotas, deltas,
     """
     overs = []
     for res, delta in deltas.items():
-        # We can't go over-quota if we're not reserving anything or if
-        # we have unlimited quotas.
-        if user_quotas[res] >= 0 and delta >= 0:
+        # We can't go over-quota if we're not reserving anything.
+        if delta >= 0:
+            # We can't go over-quota if we have unlimited quotas.
             # over if the project usage + delta is more than project quota
-            if project_quotas[res] < delta + project_usages[res]['total']:
+            if 0 <= project_quotas[res] < delta + project_usages[res]['total']:
                 LOG.debug('Request is over project quota for resource '
                           '"%(res)s". Project limit: %(limit)s, delta: '
                           '%(delta)s, current total project usage: %(total)s',
@@ -3515,8 +3525,9 @@ def _calculate_overquota(project_quotas, user_quotas, deltas,
                            'delta': delta,
                            'total': project_usages[res]['total']})
                 overs.append(res)
+            # We can't go over-quota if we have unlimited quotas.
             # over if the user usage + delta is more than user quota
-            elif user_quotas[res] < delta + user_usages[res]['total']:
+            elif 0 <= user_quotas[res] < delta + user_usages[res]['total']:
                 LOG.debug('Request is over user quota for resource '
                           '"%(res)s". User limit: %(limit)s, delta: '
                           '%(delta)s, current total user usage: %(total)s',
@@ -5608,13 +5619,14 @@ def aggregate_metadata_add(context, aggregate_id, metadata, set_delete=False,
                     query.filter(~models.AggregateMetadata.key.in_(all_keys)).\
                         soft_delete(synchronize_session=False)
 
-                query = \
-                    query.filter(models.AggregateMetadata.key.in_(all_keys))
                 already_existing_keys = set()
-                for meta_ref in query.all():
-                    key = meta_ref.key
-                    meta_ref.update({"value": metadata[key]})
-                    already_existing_keys.add(key)
+                if all_keys:
+                    query = query.filter(
+                        models.AggregateMetadata.key.in_(all_keys))
+                    for meta_ref in query.all():
+                        key = meta_ref.key
+                        meta_ref.update({"value": metadata[key]})
+                        already_existing_keys.add(key)
 
                 new_entries = []
                 for key, value in metadata.items():
@@ -6354,6 +6366,7 @@ def _instance_group_policies_add(context, id, policies, set_delete=False,
 ####################
 
 
+@main_context_manager.reader
 def pci_device_get_by_addr(context, node_id, dev_addr):
     pci_dev_ref = model_query(context, models.PciDevice).\
                         filter_by(compute_node_id=node_id).\
@@ -6364,6 +6377,7 @@ def pci_device_get_by_addr(context, node_id, dev_addr):
     return pci_dev_ref
 
 
+@main_context_manager.reader
 def pci_device_get_by_id(context, id):
     pci_dev_ref = model_query(context, models.PciDevice).\
                         filter_by(id=id).\
@@ -6373,6 +6387,7 @@ def pci_device_get_by_id(context, id):
     return pci_dev_ref
 
 
+@main_context_manager.reader
 def pci_device_get_all_by_node(context, node_id):
     return model_query(context, models.PciDevice).\
                        filter_by(compute_node_id=node_id).\
@@ -6380,6 +6395,7 @@ def pci_device_get_all_by_node(context, node_id):
 
 
 @require_context
+@main_context_manager.reader
 def pci_device_get_all_by_instance_uuid(context, instance_uuid):
     return model_query(context, models.PciDevice).\
                        filter_by(status='allocated').\
@@ -6387,12 +6403,16 @@ def pci_device_get_all_by_instance_uuid(context, instance_uuid):
                        all()
 
 
-def _instance_pcidevs_get_multi(context, instance_uuids, session=None):
-    return model_query(context, models.PciDevice, session=session).\
+@main_context_manager.reader
+def _instance_pcidevs_get_multi(context, instance_uuids):
+    if not instance_uuids:
+        return []
+    return model_query(context, models.PciDevice).\
         filter_by(status='allocated').\
         filter(models.PciDevice.instance_uuid.in_(instance_uuids))
 
 
+@main_context_manager.writer
 def pci_device_destroy(context, node_id, address):
     result = model_query(context, models.PciDevice).\
                          filter_by(compute_node_id=node_id).\
@@ -6402,18 +6422,16 @@ def pci_device_destroy(context, node_id, address):
         raise exception.PciDeviceNotFound(node_id=node_id, address=address)
 
 
+@main_context_manager.writer
 def pci_device_update(context, node_id, address, values):
-    session = get_session()
-    with session.begin():
-        query = model_query(context, models.PciDevice, session=session,
-                            read_deleted="no").\
-                        filter_by(compute_node_id=node_id).\
-                        filter_by(address=address)
-        if query.update(values) == 0:
-            device = models.PciDevice()
-            device.update(values)
-            session.add(device)
-        return query.one()
+    query = model_query(context, models.PciDevice, read_deleted="no").\
+                    filter_by(compute_node_id=node_id).\
+                    filter_by(address=address)
+    if query.update(values) == 0:
+        device = models.PciDevice()
+        device.update(values)
+        context.session.add(device)
+    return query.one()
 
 
 ####################

@@ -557,6 +557,11 @@ class ImageUnacceptable(Invalid):
     msg_fmt = _("Image %(image_id)s is unacceptable: %(reason)s")
 
 
+class ImageBadRequest(Invalid):
+    msg_fmt = _("Request of image %(image_id)s got BadRequest response: "
+                "%(response)s")
+
+
 class InstanceUnacceptable(Invalid):
     msg_fmt = _("Instance %(instance_id)s is unacceptable: %(reason)s")
 
@@ -1331,7 +1336,6 @@ class QuotaError(NovaException):
     # The error status code for out of quota for the nova api should be
     # 403 Forbidden.
     code = 413
-    headers = {'Retry-After': 0}
     safe = True
 
 
@@ -1957,3 +1961,8 @@ class UnsupportedImageModel(Invalid):
 
 class HostMappingNotFound(Invalid):
     msg_fmt = _("Host '%(name)s' is not mapped to any cell")
+
+
+class RealtimeConfigurationInvalid(Invalid):
+    msg_fmt = _("Cannot set realtime policy in a non dedicated "
+                "cpu pinning policy")

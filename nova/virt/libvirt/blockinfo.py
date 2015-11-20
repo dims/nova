@@ -257,7 +257,8 @@ def get_disk_bus_for_device_type(instance,
     elif virt_type in ("qemu", "kvm"):
         if device_type == "cdrom":
             guestarch = libvirt_utils.get_arch(image_meta)
-            if guestarch in (arch.PPC, arch.PPC64, arch.S390, arch.S390X):
+            if guestarch in (arch.PPC, arch.PPC64, arch.PPCLE, arch.PPC64LE,
+                arch.S390, arch.S390X):
                 return "scsi"
             else:
                 return "ide"
@@ -449,12 +450,12 @@ def get_root_info(instance, virt_type, image_meta, root_bdm,
                 'type': root_device_type,
                 'dev': block_device.strip_dev(root_device_name),
                 'boot_index': '1'}
-    else:
-        if not get_device_name(root_bdm) and root_device_name:
-            root_bdm = root_bdm.copy()
-            root_bdm['device_name'] = root_device_name
-        return get_info_from_bdm(instance, virt_type, image_meta,
-                                 root_bdm, {}, disk_bus)
+
+    if not get_device_name(root_bdm) and root_device_name:
+        root_bdm = root_bdm.copy()
+        root_bdm['device_name'] = root_device_name
+    return get_info_from_bdm(instance, virt_type, image_meta,
+                             root_bdm, {}, disk_bus)
 
 
 def default_device_names(virt_type, context, instance, block_device_info,

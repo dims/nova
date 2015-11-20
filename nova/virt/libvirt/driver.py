@@ -290,9 +290,6 @@ CONF.import_opt('server_proxyclient_address', 'nova.spice', group='spice')
 CONF.import_opt('vcpu_pin_set', 'nova.virt.hardware')
 CONF.import_opt('vif_plugging_is_fatal', 'nova.virt.driver')
 CONF.import_opt('vif_plugging_timeout', 'nova.virt.driver')
-CONF.import_opt('enabled', 'nova.console.serial', group='serial_console')
-CONF.import_opt('proxyclient_address', 'nova.console.serial',
-                group='serial_console')
 CONF.import_opt('hw_disk_discard', 'nova.virt.libvirt.imagebackend',
                 group='libvirt')
 CONF.import_group('workarounds', 'nova.utils')
@@ -2877,7 +2874,7 @@ class LibvirtDriver(driver.ComputeDriver):
 
         if disk_images['kernel_id']:
             fname = imagecache.get_cache_fname(disk_images, 'kernel_id')
-            raw('kernel').cache(fetch_func=libvirt_utils.fetch_image,
+            raw('kernel').cache(fetch_func=libvirt_utils.fetch_raw_image,
                                 context=context,
                                 filename=fname,
                                 image_id=disk_images['kernel_id'],
@@ -2885,7 +2882,7 @@ class LibvirtDriver(driver.ComputeDriver):
                                 project_id=instance.project_id)
             if disk_images['ramdisk_id']:
                 fname = imagecache.get_cache_fname(disk_images, 'ramdisk_id')
-                raw('ramdisk').cache(fetch_func=libvirt_utils.fetch_image,
+                raw('ramdisk').cache(fetch_func=libvirt_utils.fetch_raw_image,
                                      context=context,
                                      filename=fname,
                                      image_id=disk_images['ramdisk_id'],
@@ -3996,9 +3993,17 @@ class LibvirtDriver(driver.ComputeDriver):
                     wantsmempages = True
                     break
 
-        if not wantsmempages:
-            return
+        membacking = None
+        if wantsmempages:
+            pages = self._get_memory_backing_hugepages_support(
+                inst_topology, numatune)
+            if pages:
+                membacking = vconfig.LibvirtConfigGuestMemoryBacking()
+                membacking.hugepages = pages
 
+        return membacking
+
+    def _get_memory_backing_hugepages_support(self, inst_topology, numatune):
         if not self._has_hugepage_support():
             # We should not get here, since we should have avoided
             # reporting NUMA topology from _get_host_numa_topology
@@ -4031,11 +4036,7 @@ class LibvirtDriver(driver.ComputeDriver):
                         page.size_kb = inst_cell.pagesize
                         pages.append(page)
                         break  # Quit early...
-
-        if pages:
-            membacking = vconfig.LibvirtConfigGuestMemoryBacking()
-            membacking.hugepages = pages
-            return membacking
+        return pages
 
     def _get_flavor(self, ctxt, instance, flavor):
         if flavor is not None:
@@ -4192,7 +4193,8 @@ class LibvirtDriver(driver.ComputeDriver):
         guest.numatune = guest_numa_config.numatune
 
         guest.membacking = self._get_guest_memory_backing_config(
-            instance.numa_topology, guest_numa_config.numatune)
+            instance.numa_topology,
+            guest_numa_config.numatune)
 
         guest.metadata.append(self._get_guest_config_meta(context,
                                                           instance))
@@ -4725,7 +4727,7 @@ class LibvirtDriver(driver.ComputeDriver):
                 if vcpus is not None:
                     total += len(list(vcpus))
             except libvirt.libvirtError as e:
-                LOG.warn(_LW("couldn't obtain the vpu count from domain id:"
+                LOG.warn(_LW("couldn't obtain the vcpu count from domain id:"
                              " %(uuid)s, exception: %(ex)s"),
                          {"uuid": dom.UUIDString(), "ex": e})
             # NOTE(gtt116): give other tasks a chance.
@@ -5595,7 +5597,7 @@ class LibvirtDriver(driver.ComputeDriver):
                 (CONF.spice.enabled and not dest_local_spice)):
 
                 LOG.warn(_LW('Your libvirt version does not support the'
-                             ' VIR_DOMAIN_XML_MIGRATABLE flag, and the '
+                             ' VIR_DOMAIN_XML_MIGRATABLE flag, and the'
                              ' graphics (VNC and/or SPICE) listen'
                              ' addresses on the destination node do not'
                              ' match the addresses on the source node.'

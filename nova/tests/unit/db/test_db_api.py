@@ -825,6 +825,14 @@ class AggregateDBApiTestCase(test.TestCase):
         expected = db.aggregate_metadata_get(ctxt, result['id'])
         self.assertThat(metadata, matchers.DictMatches(expected))
 
+    def test_aggregate_metadata_add_empty_metadata(self):
+        ctxt = context.get_admin_context()
+        result = _create_aggregate(context=ctxt, metadata=None)
+        metadata = {}
+        db.aggregate_metadata_add(ctxt, result['id'], metadata)
+        expected = db.aggregate_metadata_get(ctxt, result['id'])
+        self.assertThat(metadata, matchers.DictMatches(expected))
+
     def test_aggregate_metadata_add_and_update(self):
         ctxt = context.get_admin_context()
         result = _create_aggregate(context=ctxt)
@@ -2116,6 +2124,11 @@ class InstanceTestCase(test.TestCase, ModelsObjectComparatorMixin):
         self.create_instance_with_args(context=context2, hostname='h2')
         self.flags(osapi_compute_unique_server_name_scope=None)
 
+    def test_instance_get_all_by_filters_empty_list_filter(self):
+        filters = {'uuid': []}
+        instances = db.instance_get_all_by_filters_sort(self.ctxt, filters)
+        self.assertEqual([], instances)
+
     @mock.patch('nova.db.sqlalchemy.api.undefer')
     @mock.patch('nova.db.sqlalchemy.api.joinedload')
     def test_instance_get_all_by_filters_extra_columns(self,
@@ -2578,6 +2591,10 @@ class InstanceTestCase(test.TestCase, ModelsObjectComparatorMixin):
         self.assertEqual(len(instances), 2)
         self.assertIn(instance2['uuid'], instance_uuids)
         self.assertIn(instance3['uuid'], instance_uuids)
+
+    def test_instance_get_all_by_grantee_security_groups_empty_group_ids(self):
+        results = db.instance_get_all_by_grantee_security_groups(self.ctxt, [])
+        self.assertEqual([], results)
 
     def test_instance_get_all_hung_in_rebooting(self):
         # Ensure no instances are returned.
@@ -6979,12 +6996,22 @@ class QuotaReserveNoDbTestCase(test.NoDBTestCase):
                                                     {}, {})
         self.assertFalse(overs)
 
-    def test_calculate_overquota_unlimited_quota(self):
+    def test_calculate_overquota_unlimited_user_quota(self):
         deltas = {'foo': 1}
-        project_quotas = {}
+        project_quotas = {'foo': -1}
         user_quotas = {'foo': -1}
-        project_usages = {}
-        user_usages = {'foo': 10}
+        project_usages = {'foo': {'total': 10}}
+        user_usages = {'foo': {'total': 10}}
+        overs = sqlalchemy_api._calculate_overquota(
+            project_quotas, user_quotas, deltas, project_usages, user_usages)
+        self.assertFalse(overs)
+
+    def test_calculate_overquota_unlimited_project_quota(self):
+        deltas = {'foo': 1}
+        project_quotas = {'foo': -1}
+        user_quotas = {'foo': 1}
+        project_usages = {'foo': {'total': 0}}
+        user_usages = {'foo': {'total': 0}}
         overs = sqlalchemy_api._calculate_overquota(
             project_quotas, user_quotas, deltas, project_usages, user_usages)
         self.assertFalse(overs)

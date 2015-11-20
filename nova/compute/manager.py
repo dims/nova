@@ -65,6 +65,7 @@ from nova.compute import task_states
 from nova.compute import utils as compute_utils
 from nova.compute import vm_states
 from nova import conductor
+import nova.conf
 from nova import consoleauth
 import nova.context
 from nova import exception
@@ -249,7 +250,7 @@ instance_cleaning_opts = [
                     'files.'),
 ]
 
-CONF = cfg.CONF
+CONF = nova.conf.CONF
 CONF.register_opts(compute_opts)
 CONF.register_opts(interval_opts)
 CONF.register_opts(timeout_opts)
@@ -265,8 +266,6 @@ CONF.import_opt('enabled', 'nova.rdp', group='rdp')
 CONF.import_opt('html5_proxy_base_url', 'nova.rdp', group='rdp')
 CONF.import_opt('enabled', 'nova.mks', group='mks')
 CONF.import_opt('mksproxy_base_url', 'nova.mks', group='mks')
-CONF.import_opt('enabled', 'nova.console.serial', group='serial_console')
-CONF.import_opt('base_url', 'nova.console.serial', group='serial_console')
 CONF.import_opt('destroy_after_evacuate', 'nova.utils', group='workarounds')
 CONF.import_opt('scheduler_tracks_instance_changes',
                 'nova.scheduler.host_manager')
@@ -1913,13 +1912,17 @@ class ComputeManager(manager.Manager):
                 self._cleanup_allocated_networks(context, instance,
                     requested_networks)
                 compute_utils.add_instance_fault_from_exc(context,
-                        instance, e, sys.exc_info())
+                        instance, e, sys.exc_info(),
+                        fault_message=e.kwargs['reason'])
                 self._nil_out_instance_obj_host_and_node(instance)
                 self._set_instance_obj_error_state(context, instance,
                                                    clean_task_state=True)
                 return build_results.FAILED
             LOG.debug(e.format_message(), instance=instance)
+            # This will be used for logging the exception
             retry['exc'] = traceback.format_exception(*sys.exc_info())
+            # This will be used for setting the instance fault message
+            retry['exc_reason'] = e.kwargs['reason']
             # NOTE(comstud): Deallocate networks if the driver wants
             # us to do so.
             if self.driver.deallocate_networks_on_reschedule(instance):
@@ -3621,7 +3624,7 @@ class ComputeManager(manager.Manager):
 
             # if the original vm state was STOPPED, set it back to STOPPED
             LOG.info(_LI("Updating instance to original state: '%s'"),
-                     old_vm_state)
+                     old_vm_state, instance=instance)
             if power_on:
                 instance.vm_state = vm_states.ACTIVE
                 instance.task_state = None

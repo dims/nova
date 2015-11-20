@@ -6165,6 +6165,37 @@ class ComputeTestCase(BaseTestCase):
                                                   instance,
                                                   NotImplementedError(message))
 
+    def test_add_instance_fault_with_message(self):
+        instance = self._create_fake_instance_obj()
+        exc_info = None
+
+        def fake_db_fault_create(ctxt, values):
+            self.assertIn('raise NotImplementedError', values['details'])
+            del values['details']
+
+            expected = {
+                'code': 500,
+                'message': 'hoge',
+                'instance_uuid': instance['uuid'],
+                'host': self.compute.host
+            }
+            self.assertEqual(expected, values)
+            return self._fill_fault(expected)
+
+        try:
+            raise NotImplementedError('test')
+        except NotImplementedError:
+            exc_info = sys.exc_info()
+
+        self.stubs.Set(nova.db, 'instance_fault_create', fake_db_fault_create)
+
+        ctxt = context.get_admin_context()
+        compute_utils.add_instance_fault_from_exc(ctxt,
+                                                  instance,
+                                                  NotImplementedError('test'),
+                                                  exc_info,
+                                                  fault_message='hoge')
+
     def _test_cleanup_running(self, action):
         admin_context = context.get_admin_context()
         deleted_at = (timeutils.utcnow() -
@@ -7385,6 +7416,26 @@ class ComputeTestCase(BaseTestCase):
         mock_snapshot_get.assert_any_call(mock.ANY, 'fake-id1')
         mock_snapshot_get.assert_any_call(mock.ANY, 'fake-id2')
         self.assertEqual(4, mock_snapshot_get.call_count)
+
+    def test_instance_fault_message_no_rescheduled_details_without_retry(self):
+        """This test simulates a spawn failure with no retry data.
+
+        If driver spawn raises an exception and there is no retry data
+        available, the instance fault message should not contain any details
+        about rescheduling. The fault message field is limited in size and a
+        long message about rescheduling displaces the original error message.
+        """
+        class TestException(Exception):
+            pass
+
+        instance = self._create_fake_instance_obj()
+
+        with mock.patch.object(self.compute.driver, 'spawn') as mock_spawn:
+            mock_spawn.side_effect = TestException('Preserve this')
+            self.compute.build_and_run_instance(
+                    self.context, instance, {}, {}, {},
+                    block_device_mapping=[])
+        self.assertEqual('Preserve this', instance.fault.message)
 
 
 class ComputeAPITestCase(BaseTestCase):
@@ -8905,24 +8956,30 @@ class ComputeAPITestCase(BaseTestCase):
         self.assertIsNone(
             self.compute_api._volume_size(inst_type, blank_bdm))
 
-    def test_is_volume_backed_instance_no_image(self):
+    def test_is_volume_backed_instance_no_bdm_no_image(self):
         ctxt = self.context
 
         instance = self._create_fake_instance_obj({'image_ref': ''})
         self.assertTrue(
             self.compute_api.is_volume_backed_instance(ctxt, instance, None))
 
-    def test_is_volume_backed_instance_no_bdm(self):
+    def test_is_volume_backed_instance_empty_bdm_with_image(self):
         ctxt = self.context
-        instance = self._create_fake_instance_obj({'root_device_name': 'vda'})
+        instance = self._create_fake_instance_obj({
+            'root_device_name': 'vda',
+            'image_ref': FAKE_IMAGE_REF
+        })
         self.assertFalse(
             self.compute_api.is_volume_backed_instance(
                 ctxt, instance,
                 block_device_obj.block_device_make_list(ctxt, [])))
 
-    def test_is_volume_backed_instance_bdm_volume(self):
+    def test_is_volume_backed_instance_bdm_volume_no_image(self):
         ctxt = self.context
-        instance = self._create_fake_instance_obj({'root_device_name': 'vda'})
+        instance = self._create_fake_instance_obj({
+            'root_device_name': 'vda',
+            'image_ref': ''
+        })
         bdms = block_device_obj.block_device_make_list(ctxt,
                             [fake_block_device.FakeDbBlockDeviceDict(
                                 {'source_type': 'volume',
@@ -8934,9 +8991,14 @@ class ComputeAPITestCase(BaseTestCase):
         self.assertTrue(
             self.compute_api.is_volume_backed_instance(ctxt, instance, bdms))
 
-    def test_is_volume_backed_instance_bdm_local(self):
+    def test_is_volume_backed_instance_bdm_local_no_image(self):
+        # if the root device is local the instance is not volume backed, even
+        # if no image_ref is set.
         ctxt = self.context
-        instance = self._create_fake_instance_obj({'root_device_name': 'vda'})
+        instance = self._create_fake_instance_obj({
+            'root_device_name': 'vda',
+            'image_ref': ''
+        })
         bdms = block_device_obj.block_device_make_list(ctxt,
                [fake_block_device.FakeDbBlockDeviceDict(
                 {'source_type': 'volume',
@@ -8957,6 +9019,22 @@ class ComputeAPITestCase(BaseTestCase):
         self.assertFalse(
             self.compute_api.is_volume_backed_instance(ctxt, instance, bdms))
 
+    def test_is_volume_backed_instance_bdm_volume_with_image(self):
+        ctxt = self.context
+        instance = self._create_fake_instance_obj({
+            'root_device_name': 'vda',
+            'image_ref': FAKE_IMAGE_REF
+        })
+        bdms = block_device_obj.block_device_make_list(ctxt,
+                            [fake_block_device.FakeDbBlockDeviceDict(
+                                {'source_type': 'volume',
+                                 'device_name': '/dev/vda',
+                                 'volume_id': 'fake_volume_id',
+                                 'boot_index': 0,
+                                 'destination_type': 'volume'})])
+        self.assertTrue(
+            self.compute_api.is_volume_backed_instance(ctxt, instance, bdms))
+
     def test_is_volume_backed_instance_bdm_snapshot(self):
         ctxt = self.context
         instance = self._create_fake_instance_obj({'root_device_name': 'vda'})
@@ -8972,18 +9050,15 @@ class ComputeAPITestCase(BaseTestCase):
         self.assertTrue(
             self.compute_api.is_volume_backed_instance(ctxt, instance, bdms))
 
-    def test_is_volume_backed_instance_no_bdms(self):
+    @mock.patch.object(objects.BlockDeviceMappingList, 'get_by_instance_uuid')
+    def test_is_volume_backed_instance_empty_bdm_by_uuid(self, mock_bdms):
         ctxt = self.context
         instance = self._create_fake_instance_obj()
-
-        self.mox.StubOutWithMock(objects.BlockDeviceMappingList,
-                                 'get_by_instance_uuid')
-        objects.BlockDeviceMappingList.get_by_instance_uuid(
-                    ctxt, instance['uuid']).AndReturn(
-                            block_device_obj.block_device_make_list(ctxt, []))
-        self.mox.ReplayAll()
-
-        self.compute_api.is_volume_backed_instance(ctxt, instance, None)
+        mock_bdms.return_value = \
+            block_device_obj.block_device_make_list(ctxt, [])
+        self.assertFalse(
+            self.compute_api.is_volume_backed_instance(ctxt, instance, None))
+        mock_bdms.assert_called_with(ctxt, instance.uuid)
 
     def test_reservation_id_one_instance(self):
         """Verify building an instance has a reservation_id that

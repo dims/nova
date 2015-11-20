@@ -21,7 +21,7 @@ SQLAlchemy<1.1.0,>=0.9.9
 boto>=2.32.1
 decorator>=3.4.0
 eventlet>=0.17.4
-Jinja2>=2.6 # BSD License (3 clause)
+Jinja2>=2.8 # BSD License (3 clause)
 keystonemiddleware!=2.4.0,>=2.0.0
 lxml>=2.3
 Routes!=2.0,!=2.1,>=1.12.3;python_version=='2.7'

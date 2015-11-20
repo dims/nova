@@ -1090,6 +1090,18 @@ class NUMATopologyTest(test.NoDBTestCase):
                 },
                 "expect": exception.ImageCPUPinningForbidden,
             },
+            {
+                # Invalid CPU pinning policy with realtime
+                "flavor": objects.Flavor(vcpus=4, memory_mb=2048,
+                                         extra_specs={
+                                             "hw:cpu_policy": "shared",
+                                             "hw:cpu_realtime": "yes",
+                                         }),
+                "image": {
+                    "properties": {}
+                },
+                "expect": exception.RealtimeConfigurationInvalid,
+            },
         ]
 
         for testitem in testdata:
@@ -1566,7 +1578,7 @@ class HelperMethodsTestCase(test.NoDBTestCase):
             cells=[
                 objects.InstanceNUMACell(
                     id=0, cpuset=set([0, 1]), memory=256, pagesize=2048,
-                    cpu_pinning={0: 1, 0: 1}),
+                    cpu_pinning={0: 0, 1: 1}),
                 objects.InstanceNUMACell(
                     id=1, cpuset=set([2]), memory=256, pagesize=2048,
                     cpu_pinning={2: 3}),
