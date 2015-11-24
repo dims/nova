@@ -2,20 +2,6 @@
 # of appearance. Changing the order has an impact on the overall integration
 # process, which may cause wedges in the gate later.
 
--e git+https://github.com/openstack/oslo.concurrency.git#egg=oslo.concurrency
--e git+https://github.com/openstack/oslo.config.git#egg=oslo.config
--e git+https://github.com/openstack/oslo.context.git#egg=oslo.context
--e git+https://github.com/openstack/oslo.log.git#egg=oslo.log
--e git+https://github.com/openstack/oslo.reports.git#egg=oslo.reports
--e git+https://github.com/openstack/oslo.serialization.git#egg=oslo.serialization
--e git+https://github.com/openstack/oslo.service.git#egg=oslo.service
--e git+https://github.com/openstack/oslo.utils.git#egg=oslo.utils
--e git+https://github.com/openstack/oslo.db.git#egg=oslo.db
--e git+https://github.com/openstack/oslo.rootwrap.git#egg=oslo.rootwrap
--e git+https://github.com/openstack/oslo.messaging.git#egg=oslo.messaging
--e git+https://github.com/openstack/oslo.i18n.git#egg=oslo.i18n
--e git+https://github.com/openstack/oslo.middleware.git#egg=oslo.middleware
--e git+https://github.com/openstack/oslo.versionedobjects.git#egg=oslo.versionedobjects
 pbr>=1.6
 SQLAlchemy<1.1.0,>=0.9.9
 boto>=2.32.1
@@ -48,7 +34,21 @@ six>=1.9.0
 stevedore>=1.5.0 # Apache-2.0
 setuptools>=16.0
 websockify>=0.6.1
+oslo.concurrency>=2.3.0 # Apache-2.0
+oslo.config>=2.7.0 # Apache-2.0
+oslo.context>=0.2.0 # Apache-2.0
+oslo.log>=1.12.0 # Apache-2.0
+oslo.reports>=0.6.0 # Apache-2.0
+oslo.serialization>=1.10.0 # Apache-2.0
+oslo.utils>=2.8.0 # Apache-2.0
+oslo.db>=3.2.0 # Apache-2.0
+oslo.rootwrap>=2.0.0 # Apache-2.0
+oslo.messaging!=2.8.0,>2.6.1 # Apache-2.0
+oslo.i18n>=1.5.0 # Apache-2.0
+oslo.service>=0.12.0 # Apache-2.0
 rfc3986>=0.2.0 # Apache-2.0
+oslo.middleware>=2.9.0 # Apache-2.0
 psutil<2.0.0,>=1.1.1
+oslo.versionedobjects>=0.13.0
 alembic>=0.8.0
 os-brick>=0.4.0 # Apache-2.0
