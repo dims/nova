@@ -48,21 +48,21 @@ server status is one of the following values:
 
 -  ``SHUTOFF``: The virtual machine (VM) was powered down by the user,
    but not through the OpenStack Compute API. For example, the user
-   issued a ``shutdown -h`` command from within the server instance. If
+   issued a ``shutdown -h`` command from within the server. If
    the OpenStack Compute manager detects that the VM was powered down,
-   it transitions the server instance to the SHUTOFF status. If you use
-   the OpenStack Compute API to restart the instance, the instance might
+   it transitions the server to the SHUTOFF status. If you use
+   the OpenStack Compute API to restart the server, it might
    be deleted first, depending on the value in the
    *``shutdown_terminate``* database field on the Instance model.
 
 -  ``SUSPENDED``: The server is suspended, either by request or
    necessity. This status appears for only the following hypervisors:
-   XenServer/XCP, KVM, and ESXi. Administrative users may suspend an
-   instance if it is infrequently used or to perform system maintenance.
-   When you suspend an instance, its VM state is stored on disk, all
+   XenServer/XCP, KVM, and ESXi. Administrative users may suspend a
+   server if it is infrequently used or to perform system maintenance.
+   When you suspend a server, its VM state is stored on disk, all
    memory is written to disk, and the virtual machine is stopped.
-   Suspending an instance is similar to placing a device in hibernation;
-   memory and vCPUs become available to create other instances.
+   Suspending a server is similar to placing a device in hibernation;
+   memory and vCPUs become available to create other servers.
 
 -  ``UNKNOWN``: The state of the server is unknown. Contact your cloud
    provider.
@@ -125,12 +125,12 @@ Server actions
 -  **Evacuate**
 
    Should a compute node actually go offline, it can no longer report
-   status about any of the instances on it. This means they'll be
+   status about any of the servers on it. This means they'll be
    listed in an 'ACTIVE' state forever.
 
    Evacuate is a work around for this that lets an administrator
-   forceably rebuild these zombie instances on another node. It makes
-   no guarantees that the instance was actually down, so fencing is
+   forceably rebuild these zombie servers on another node. It makes
+   no guarantees that the host was actually down, so fencing is
    left as an exercise to the deployer.
 
 -  **Resize** (including **Confirm resize**, **Revert resize**)
@@ -143,85 +143,85 @@ Server actions
    automatically confirmed after 24 hours if you do not confirm or
    revert them.
 
-   Confirm resize action will delete the old instance in the virt layer.
-   The spawned instance in the virt layer will be used from then on.
-   on the contrary, Revert resize action will delete the new instance
-   spawned in the virt layer and revert all changes, the original instance
+   Confirm resize action will delete the old server in the virt layer.
+   The spawned server in the virt layer will be used from then on.
+   on the contrary, Revert resize action will delete the new server
+   spawned in the virt layer and revert all changes, the original server
    will still be used from then on.
 
    Also, there there is a periodic task configured by param
    CONF.resize_confirm_window(in seconds), if this value is not 0, nova compute
-   will check whether the instance is in resized state longer than
+   will check whether the server is in resized state longer than
    CONF.resize_confirm_window, it will automatically confirm the resize
-   of the instance.
+   of the server.
 
 -  **Pause**, **Unpause**
 
    You can pause a server by making a pause request. This request stores
-   the state of the VM in RAM. A paused instance continues to run in a
+   the state of the VM in RAM. A paused server continues to run in a
    frozen state.
 
-   Unpause returns a paused instance back to an active state.
+   Unpause returns a paused server back to an active state.
 
 -  **Suspend**, **Resume**
 
-   Administrative users might want to suspend an instance if it is
+   Administrative users might want to suspend a server if it is
    infrequently used or to perform system maintenance. When you suspend
-   an instance, its VM state is stored on disk, all memory is written to
-   disk, and the virtual machine is stopped. Suspending an instance is
+   a server, its VM state is stored on disk, all memory is written to
+   disk, and the virtual machine is stopped. Suspending a server is
    similar to placing a device in hibernation; memory and vCPUs become
-   available to create other instances.
+   available to create other servers.
 
-   Resume will resume a suspended instance to an active state.
+   Resume will resume a suspended server to an active state.
 
 -  **Snapshot**
 
-   You can store the current state of the instance root disk to be saved
+   You can store the current state of the server root disk to be saved
    and uploaded back into the glance image repository.
-   Then the instance can later be booted again using this saved image.
+   Then the server can later be booted again using this saved image.
 
 -  **Backup**
 
-   You can use backup method to store instance's current state in the glance
+   You can use backup method to store server's current state in the glance
    repository, in the mean time, old snapshots will be removed based on the
    given 'daily' or 'weekly' type.
 
 -  **Start**
 
-   Power on an instance.
+   Power on an server.
 
 -  **Stop**
 
-   Power off an instance.
+   Power off an server.
 
 -  **Delete**, **Restore**
 
-   Power off the given instance first then detach all the resources associated
-   to the instance such as network and volumes, then delete the instance.
+   Power off the given server first then detach all the resources associated
+   to the server such as network and volumes, then delete the server.
 
-   CONF.reclaim_instance_interval (in seconds) decides whether the instance to
+   CONF.reclaim_instance_interval (in seconds) decides whether the server to
    be deleted will still be in the system. If this value is greater than 0,
-   the deleted instance will not be deleted immediately, instead it will be put
+   the deleted server will not be deleted immediately, instead it will be put
    into a queue until it's too old(deleted time greater than the value of
    CONF.reclaim_instance_interval). Admin is able to use Restore action to
-   recover the instance from the delete queue. If the deleted instance stays
+   recover the server from the delete queue. If the deleted server stays
    more than the CONF.reclaim_instance_interval, it will be deleted by compute
    service automatically.
 
 -  **Shelve**, **Shelve offload**, **Unshelve**
 
-   Shelving an instance indicates it will not be needed for some time and may be
+   Shelving an server indicates it will not be needed for some time and may be
    temporarily removed from the hypervisors. This allows its resources to
    be freed up for use by someone else.
 
-   Shelve will power off the given instance and take a snapshot if it is booted
-   from image. The instance can then be offloaded from the compute host and its
+   Shelve will power off the given server and take a snapshot if it is booted
+   from image. The server can then be offloaded from the compute host and its
    resources deallocated. Offloading is done immediately if booted from volume,
    but if booted from image the offload can be delayed for some time or
    indefinitely, leaving the image on disk and the resources still allocated.
 
-   Shelve offload is used to explicitly remove a shelved instance that has been
-   left on a host. This action can only be used on a shelved instance and is
+   Shelve offload is used to explicitly remove a shelved server that has been
+   left on a host. This action can only be used on a shelved server and is
    usually performed by an admin.
 
    Unshelve is the reverse operation of Shelve. It builds and boots the server
@@ -230,35 +230,35 @@ Server actions
 
 -  **Lock**, **Unlock**
 
-   Lock an instance so no further actions are allowed to the instance. This can
-   be done by either admin or the instance's owner.
+   Lock a server so no further actions are allowed to the server. This can
+   be done by either admin or the server's owner.
 
-   Unlock will unlock an instance in locked state so additional
-   operations can be performed on the instance.
+   Unlock will unlock an server in locked state so additional
+   operations can be performed on the server.
 
 -  **Rescue**, **Unrescue**
 
-   The rescue operation starts an instance in a special configuration whereby
+   The rescue operation starts a server in a special configuration whereby
    it is booted from a special root disk image. This enables the tenant to try
    and restore a broken vitrual machine.
 
-   Unrescue is the reverse action of Rescue, instance spawned from the special
+   Unrescue is the reverse action of Rescue, the server spawned from the special
    root image will be deleted.
 
 -  **Set admin password**
 
-   Set the root/admin password for the given instance, it wil uses an
+   Set the root/admin password for the given server, it uses an
    optional installed agent to inject the admin password.
 
 -  **Migrate**, **Live migrate**
 
-   Migrate is usually utilized by admin, it will move an instance to another
+   Migrate is usually utilized by admin, it will move a server to another
    host; it utilize the 'resize' action but with same flavor, so during
-   migration, the instance will be power off and rebuilt on another host.
+   migration, the server will be power off and rebuilt on another host.
 
-   Live migrate also moves an instance from one host to another, but it won't
-   power of the instance in general so instance will not suffer a down time.
-   Administrators may use this to evacuate instances from a host that needs to
+   Live migrate also moves an server from one host to another, but it won't
+   power off the server in general so the server will not suffer a down time.
+   Administrators may use this to evacuate servers from a host that needs to
    undergo maintenance tasks.
 
 Server passwords
@@ -297,10 +297,10 @@ server interface.
 Server personality
 ~~~~~~~~~~~~~~~~~~
 
-You can customize the personality of a server instance by injecting data
+You can customize the personality of a server by injecting data
 into its file system. For example, you might want to insert ssh keys,
 set configuration files, or store data that you want to retrieve from
-inside the instance. This feature provides a minimal amount of
+inside the server. This feature provides a minimal amount of
 launch-time personalization. If you require significant customization,
 create a custom image.
 
@@ -399,63 +399,6 @@ compute host to another including shelve, resize, migrations and
 evacuate. The following use cases demonstrate the intention of the
 actions and the consequence for operational procedures.
 
-User doesn't want to be charged when not using a server
--------------------------------------------------------
-
-Sometimes a user does not require a server to be active for a while,
-perhaps over a weekend or at certain times of day.
-Ideally they don't want to be billed for those resources.
-Just powering down a server does not free up any resources,
-but shelving a server does free up resources to be used by other users.
-This makes it feasible for a cloud operator to offer a discount when
-an server is shelved.
-
-When the user shelves a server the operator can choose to remove it
-from the compute hosts, i.e. the operator can offload the shelved server.
-When the user's server is unshelved, it is scheduled to a new
-host according to the operators policies for distributing work loads
-across the compute hosts, including taking disabled hosts into account.
-This will contribute to increased overall capacity, freeing hosts that
-are ear-marked for maintenance and providing contiguous blocks
-of resources on single hosts due to moving out old servers.
-
-Shelving a server is not normally a choice that is available to
-the cloud operator because it affects the availability of the server
-being provided to the user.
-
-User resizes server to get more resources
------------------------------------------
-
-Sometimes a user may want to change the flavor of a server, e.g. change
-the quantity of cpus, disk, memory or any other resource. This is done
-by rebuilding the server with a new flavor. As the server is being
-moved, it is normal to reschedule the server to another host
-(although resize to the same host is an option for the operator).
-
-Resize involves shutting down the server, finding a host that has
-the correct resources for the new flavor size, moving the current
-server (including all storage) to the new host. Once the server
-has been given the appropriate resources to match the new flavor,
-the server is started again.
-
-After the resize operation, when the user is happy their server is
-working correctly after the resize, the user calls Confirm Resize.
-This deletes the backup server that was kept on the source host.
-Alternatively, the user can call Revert Resize to delete the new
-resized server, and restore the back up that was stored on the source
-host. If the user does not manually confirm the resize within a
-configured time period, the resize is automatically confirmed, to
-free up the space the backup is using on the source host.
-
-As with shelving, resize provides the cloud operator with an
-opportunity to redistribute work loads across the cloud according
-to the operators scheduling policy, providing the same benefits as
-above.
-
-Resizing a server is not normally a choice that is available to
-the cloud operator because it changes the nature of the server
-being provided to the user.
-
 Cloud operator needs to move a server
 -------------------------------------
 
@@ -470,10 +413,9 @@ and live migration (moving a server that is active).
 
 Cold migration moves a server from one host to another by copying its
 state, local storage and network configuration to new resources
-allocated on a new host selected by scheduling policies or as
-an explicit decision. The operation is relatively quick as the
-server is not changing its state during the copy process. The user
-does not have access to the server during the operation.
+allocated on a new host selected by scheduling policies. The operation is
+relatively quick as the server is not changing its state during the copy
+process. The user does not have access to the server during the operation.
 
 Live migration moves a server from one host to another while it
 is active, so it is constantly changing its state during the action.
@@ -518,9 +460,9 @@ a cloud:
 
 - **Resource Optimization**
 
-   To reduce energy usage, some users will try and move servers so
-   they fit into the minimum number of hosts, allowing some servers
-   to be turned off.
+   To reduce energy usage, some cloud operators will try and move
+   servers so they fit into the minimum number of hosts, allowing
+   some servers to be turned off.
 
    Sometimes higher performance might be wanted, so servers are
    spread out between the hosts to minimize resource contention.
@@ -564,3 +506,60 @@ Evacuating a server is solely in the domain of the cloud operator because
 it must be performed in coordination with other operational procedures to
 be safe. A user is not normally aware of compute hosts but is adversely
 affected by their failure.
+
+User resizes server to get more resources
+-----------------------------------------
+
+Sometimes a user may want to change the flavor of a server, e.g. change
+the quantity of cpus, disk, memory or any other resource. This is done
+by rebuilding the server with a new flavor. As the server is being
+moved, it is normal to reschedule the server to another host
+(although resize to the same host is an option for the operator).
+
+Resize involves shutting down the server, finding a host that has
+the correct resources for the new flavor size, moving the current
+server (including all storage) to the new host. Once the server
+has been given the appropriate resources to match the new flavor,
+the server is started again.
+
+After the resize operation, when the user is happy their server is
+working correctly after the resize, the user calls Confirm Resize.
+This deletes the backup server that was kept on the source host.
+Alternatively, the user can call Revert Resize to delete the new
+resized server, and restore the back up that was stored on the source
+host. If the user does not manually confirm the resize within a
+configured time period, the resize is automatically confirmed, to
+free up the space the backup is using on the source host.
+
+As with shelving, resize provides the cloud operator with an
+opportunity to redistribute work loads across the cloud according
+to the operators scheduling policy, providing the same benefits as
+above.
+
+Resizing a server is not normally a choice that is available to
+the cloud operator because it changes the nature of the server
+being provided to the user.
+
+User doesn't want to be charged when not using a server
+-------------------------------------------------------
+
+Sometimes a user does not require a server to be active for a while,
+perhaps over a weekend or at certain times of day.
+Ideally they don't want to be billed for those resources.
+Just powering down a server does not free up any resources,
+but shelving a server does free up resources to be used by other users.
+This makes it feasible for a cloud operator to offer a discount when
+a server is shelved.
+
+When the user shelves a server the operator can choose to remove it
+from the compute hosts, i.e. the operator can offload the shelved server.
+When the user's server is unshelved, it is scheduled to a new
+host according to the operators policies for distributing work loads
+across the compute hosts, including taking disabled hosts into account.
+This will contribute to increased overall capacity, freeing hosts that
+are ear-marked for maintenance and providing contiguous blocks
+of resources on single hosts due to moving out old servers.
+
+Shelving a server is not normally a choice that is available to
+the cloud operator because it affects the availability of the server
+being provided to the user.
