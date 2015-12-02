@@ -19,6 +19,7 @@ import datetime
 import iso8601
 import mock
 from mox3 import mox
+from oslo_policy import policy as oslo_policy
 from oslo_serialization import jsonutils
 from oslo_utils import timeutils
 from oslo_utils import uuidutils
@@ -40,7 +41,6 @@ from nova import exception
 from nova import objects
 from nova.objects import base as obj_base
 from nova.objects import quotas as quotas_obj
-from nova.openstack.common import policy as common_policy
 from nova import policy
 from nova import quota
 from nova import test
@@ -677,26 +677,9 @@ class _ComputeAPIUnitTestMixIn(object):
         self._test_reboot_type_fails('SOFT', task_state=task_states.SUSPENDING)
 
     def _test_delete_resizing_part(self, inst, deltas):
-        fake_db_migration = test_migration.fake_db_migration()
-        migration = objects.Migration._from_db_object(
-                self.context, objects.Migration(),
-                fake_db_migration)
-        inst.instance_type_id = migration.new_instance_type_id
-        old_flavor = self._create_flavor(vcpus=1, memory_mb=512)
+        old_flavor = inst.old_flavor
         deltas['cores'] = -old_flavor.vcpus
         deltas['ram'] = -old_flavor.memory_mb
-
-        self.mox.StubOutWithMock(objects.Migration,
-                                 'get_by_instance_and_status')
-        self.mox.StubOutWithMock(compute_utils,
-                                 'get_inst_attrs_from_migration')
-
-        self.context.elevated().AndReturn(self.context)
-        objects.Migration.get_by_instance_and_status(
-            self.context, inst.uuid, 'post-migrating').AndReturn(migration)
-        compute_utils.get_inst_attrs_from_migration(
-            migration, inst).AndReturn((old_flavor.vcpus,
-                                        old_flavor.memory_mb))
 
     def _test_delete_resized_part(self, inst):
         migration = objects.Migration._from_db_object(
@@ -898,8 +881,10 @@ class _ComputeAPIUnitTestMixIn(object):
         self._test_delete('delete', launched_at=None)
 
     def test_delete_in_resizing(self):
+        old_flavor = objects.Flavor(vcpus=1, memory_mb=512, extra_specs={})
         self._test_delete('delete',
-                          task_state=task_states.RESIZE_FINISH)
+                          task_state=task_states.RESIZE_FINISH,
+                          old_flavor=old_flavor)
 
     def test_delete_in_resized(self):
         self._test_delete('delete', vm_state=vm_states.RESIZED)
@@ -2924,11 +2909,11 @@ class _ComputeAPIUnitTestMixIn(object):
     def test_skip_policy_check(self, mock_create, mock_get_ins_by_filters,
                                mock_get, mock_pause, mock_action, mock_save):
         policy.reset()
-        rules = {'compute:pause': common_policy.parse_rule('!'),
-                 'compute:get': common_policy.parse_rule('!'),
-                 'compute:get_all': common_policy.parse_rule('!'),
-                 'compute:create': common_policy.parse_rule('!')}
-        policy.set_rules(common_policy.Rules(rules))
+        rules = {'compute:pause': '!',
+                 'compute:get': '!',
+                 'compute:get_all': '!',
+                 'compute:create': '!'}
+        policy.set_rules(oslo_policy.Rules.from_dict(rules))
         instance = self._create_instance_obj()
         mock_get.return_value = instance
 
