@@ -86,6 +86,17 @@ several key concepts:
    reason. Such a separation is possible in Nova if an admin carefully sets up
    availability zones for that, but it is not the default.
 
+-  **User data**
+   A user data file is a special key in the metadata service that holds a file
+   that cloud-aware applications in the server can access.
+
+   Nova has two ways to send user data to the deploying instance, one is by
+   metadata service to let server able to connect to its metadata through
+   a predefined ip address (169.254.169.254), then other is to use config
+   drive which will wrap metadata into a iso9660 or vfat format disk so that
+   the new deployed server can consume it by active engines such as cloud-init
+   during its boot process.
+
 Networking Concepts
 -------------------
 
@@ -115,16 +126,112 @@ In this section we focus on this related to networking.
 Administrator Concepts
 =======================
 
-Come APIs are largely focused on administration of Nova, and generally focus
+Some APIs are largely focused on administration of Nova, and generally focus
 on compute hosts rather than servers.
+
+-  **Services**
+
+   Services are provide by Nova components. Normally, the Nova component runs
+   as a process on the controller/compute node to provide the service. These
+   services may be end-user facing, such as the the OpenStack Compute REST API
+   service, but most just work with other Nova services. The status of each
+   service is monitored by Nova, and if it is not responding normally, Nova
+   will update its status so that requests are not sent to that service
+   anymore. The service can also be controlled by an Administrator in order to
+   run maintenance or upgrades, or in response to changing workloads.
+
+   - **nova-osapi_compute**
+
+     This service provides the OpenStack Compute REST API to end users.
+
+   - **nova-metadata**
+
+     This service provides the OpenStack Metadata API to servers. The metadata
+     is used to configure the running servers.
+
+   - **nova-scheduler**
+
+     This service provides compute request scheduling by tracking available
+     resources, and finding the host that can best fulfill the request.
+
+   - **nova-conductor**
+
+     This service provides database access for the other services, and handles
+     internal version compatibility when different services are running
+     different versions of code. The conductor service also handles
+     long-running requests.
+
+   - **nova-compute**
+
+     This service runs on every compute node, and communicates with a
+     hypervisor for managing compute resources on that node.
+
+   - **nova-network**
+
+     This service handles networking of virtual servers. It is no longer under
+     active development, and is being replaced by Neutron.
+
+   - **nova-ec2(deprecated)**
+
+     This service provides AWS EC2 API compatibility.
+
+   - **nova-consoleauth**
+
+     This service provides authorization for consoles.
+
+   - **nova-cert**
+
+     This service handles the management of X509 certificates.
+
+-  **Services Actions**
+
+   - **enable, disable, disable-log-reason**
+
+     The service can be disabled to indicate the service didn't provided
+     service anymore. This is used by admin to stop service for maintenance.
+     For example, when Administrator wants to maintain a specific compute node,
+     Administrator can disable nova-compute service on that compute node. Then
+     nova won't dispatch any new compute request to that compute node anymore.
+     Administrator also can add note for disable reason.
+
+   - **forced-down**
+
+     This action allows you set the state of service down immediately. Actually
+     Nova only provides the health monitor of service status, there isn't any
+     guarantee about health status of other parts of infrastructure, like the
+     health status of data network, storage network and other hardwares. The
+     more complete health monitor of infrastructure is provided by external
+     system normally. An external health monitor system can marks the service
+     down for notifying the fault.
+     `(This action is enabled in Microversion 2.11)`
 
 -  **Hosts**
 
-   TODO
+   Hosts are the *physical machines* that provide the resources for the virtual
+   servers created in Nova. They run a ``hypervisor`` (see definition below)
+   that handles the actual creation and management of the virtual servers.
+   Hosts also run the ``Nova compute service``, which receives requests from
+   Nova to interact with the virtual servers on that machine. When compute
+   service receives a request, it calls the appropriate methods of the driver
+   for that hypervisor in order to carry out the request. The driver acts as
+   the translator from generic Nova requests to hypervisor-specific calls.
+   Hosts report their current state back to Nova, where it is tracked by the
+   scheduler service, so that the scheduler can place requests for new virtual
+   servers on the hosts that can best fit them.
 
 -  **Host Actions**
 
-   TODO
+   A *host action* is one that affects the physical host machine, as opposed to
+   actions that only affect the virtual servers running on that machine. There
+   are three 'power' actions that are supported: *startup*, *shutdown*, and
+   *reboot*. There are also two 'state' actions: enabling/disabling the host,
+   and setting the host into or out of maintenance mode. Of course, carrying
+   out these actions can affect running virtual servers on that host, so their
+   state will need to be considered before carrying out the host action. For
+   example, if you want to call the 'shutdown' action to turn off a host
+   machine, you might want to migrate any virtual servers on that host before
+   shutting down the host machine so that the virtual servers continue to be
+   available without interruption.
 
 -  **Hypervisors**
 
@@ -141,13 +248,6 @@ on compute hosts rather than servers.
 -  **Certificates**
 
    TODO
-
-Error Handling
-==============
-
-The Compute API follows the standard HTTP error code conventions.
-
-TODO - add details including: request id, migrations and instance actions.
 
 Relationship with Volume API
 =============================
