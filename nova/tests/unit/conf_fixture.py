@@ -14,19 +14,18 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-from oslo_config import cfg
 from oslo_config import fixture as config_fixture
 from oslo_policy import opts as policy_opts
 
+import nova.conf
 from nova import config
 from nova import ipv6
 from nova import paths
 from nova.tests.unit import utils
 
-CONF = cfg.CONF
+CONF = nova.conf.CONF
 CONF.import_opt('use_ipv6', 'nova.netconf')
 CONF.import_opt('host', 'nova.netconf')
-CONF.import_opt('scheduler_driver', 'nova.scheduler.manager')
 CONF.import_opt('fake_network', 'nova.network.linux_net')
 CONF.import_opt('network_size', 'nova.network.manager')
 CONF.import_opt('num_networks', 'nova.network.manager')

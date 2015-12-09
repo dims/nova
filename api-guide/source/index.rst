@@ -39,7 +39,7 @@ access to your own deployment, and you should also be familiar with the
 following concepts:
 
 *  OpenStack Compute service
-*  ReSTful web services
+*  ReSTful HTTP services
 *  HTTP/1.1
 *  JSON data serialization formats
 
@@ -59,7 +59,8 @@ Following the Liberty release, every Nova deployment should have
 the following endpoints:
 
 * / - list of available versions
-* /v2.0 - the first version of the Compute API, uses extensions
+* /v2 - the first version of the Compute API, uses extensions
+        (we call this Compute API v2.0)
 * /v1.1 - an alias for v2.0 for backwards compatibility
 * /v2.1 - same API, except uses microversions
 

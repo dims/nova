@@ -8,6 +8,10 @@ a physical machine or a container.
 Server status
 ~~~~~~~~~~~~~
 
+TODO: This section's content is old, we need to update the status list.
+The task_state and vm_state which expose to Administrator need description to
+help user to understand the difference.
+
 You can filter the list of servers by image, flavor, name, and status
 through the respective query parameters.
 
@@ -118,6 +122,12 @@ administrative password are guaranteed to be returned in the request.
 You can retrieve additional attributes by performing subsequent **GET**
 operations on the server.
 
+Server query
+~~~~~~~~~~~~
+
+TODO: We should introduce that there are multiple methods to filter the
+response of list servers.
+
 Server actions
 ~~~~~~~~~~~~~~~
 
@@ -217,8 +227,8 @@ Server actions
    be deleted will still be in the system. If this value is greater than 0,
    the deleted server will not be deleted immediately, instead it will be put
    into a queue until it's too old(deleted time greater than the value of
-   CONF.reclaim_instance_interval). Admin is able to use Restore action to
-   recover the server from the delete queue. If the deleted server stays
+   CONF.reclaim_instance_interval). Administrator is able to use Restore action
+   to recover the server from the delete queue. If the deleted server stays
    more than the CONF.reclaim_instance_interval, it will be deleted by compute
    service automatically.
 
@@ -236,7 +246,7 @@ Server actions
 
    Shelve offload is used to explicitly remove a shelved server that has been
    left on a host. This action can only be used on a shelved server and is
-   usually performed by an admin.
+   usually performed by an administrator.
 
    Unshelve is the reverse operation of Shelve. It builds and boots the server
    again, on a new scheduled host if it was offloaded, using the shelved image
@@ -245,7 +255,7 @@ Server actions
 -  **Lock**, **Unlock**
 
    Lock a server so no further actions are allowed to the server. This can
-   be done by either admin or the server's owner.
+   be done by either administrator or the server's owner.
 
    Unlock will unlock an server in locked state so additional
    operations can be performed on the server.
@@ -259,15 +269,15 @@ Server actions
    Unrescue is the reverse action of Rescue, the server spawned from the special
    root image will be deleted.
 
--  **Set admin password**
+-  **Set administrator password**
 
-   Set the root/admin password for the given server, it uses an
-   optional installed agent to inject the admin password.
+   Set the root/administrator password for the given server, it uses an
+   optional installed agent to inject the administrator password.
 
 -  **Migrate**, **Live migrate**
 
-   Migrate is usually utilized by admin, it will move a server to another
-   host; it utilize the 'resize' action but with same flavor, so during
+   Migrate is usually utilized by administrator, it will move a server to
+   another host; it utilize the 'resize' action but with same flavor, so during
    migration, the server will be power off and rebuilt on another host.
 
    Live migrate also moves an server from one host to another, but it won't
@@ -299,6 +309,21 @@ size of the metadata key and value is 255 bytes each. The maximum number
 of key-value pairs that can be supplied per server is determined by the
 compute provider and may be queried via the maxServerMeta absolute
 limit.
+
+Block Device Mapping
+~~~~~~~~~~~~~~~~~~~~
+
+TODO: Add some description about BDM.
+
+Scheduler Hints
+~~~~~~~~~~~~~~~
+
+TODO: Add description about how to custom scheduling policy for server booting.
+
+Server Consoles
+~~~~~~~~~~~~~~~
+
+TODO: We have multiple endpoints about consoles, we should explain that.
 
 Server networks
 ~~~~~~~~~~~~~~~

@@ -718,6 +718,10 @@ class ComputeManager(manager.Manager):
         self.use_legacy_block_device_info = \
                             self.driver.need_legacy_block_device_info
 
+    def reset(self):
+        LOG.info(_LI('Reloading compute RPC API'))
+        self.compute_rpcapi = compute_rpcapi.ComputeAPI()
+
     def _get_resource_tracker(self, nodename):
         rt = self._resource_tracker_dict.get(nodename)
         if not rt:
@@ -3349,29 +3353,6 @@ class ComputeManager(manager.Manager):
                   diff, instance=instance)
         self.driver.change_instance_metadata(context, instance, diff)
 
-    def _cleanup_stored_instance_types(self, instance, restore_old=False):
-        """Clean up "old" and "new" instance_type information stored in
-        instance's system_metadata. Optionally update the "current"
-        instance_type to the saved old one first.
-
-        Returns the updated system_metadata as a dict, the
-        post-cleanup current instance type and the to-be dropped
-        instance type.
-        """
-        sys_meta = instance.system_metadata
-        if restore_old:
-            instance_type = instance.get_flavor('old')
-            drop_instance_type = instance.get_flavor()
-            instance.set_flavor(instance_type)
-        else:
-            instance_type = instance.get_flavor()
-            drop_instance_type = instance.get_flavor('old')
-
-        instance.delete_flavor('old')
-        instance.delete_flavor('new')
-
-        return sys_meta, instance_type, drop_instance_type
-
     @wrap_exception()
     @wrap_instance_event
     @wrap_instance_fault
@@ -3439,11 +3420,10 @@ class ComputeManager(manager.Manager):
         with self._error_out_instance_on_exception(context, instance,
                                                    quotas=quotas):
             # NOTE(danms): delete stashed migration information
-            sys_meta, instance_type, old_instance_type = (
-                self._cleanup_stored_instance_types(instance))
-            sys_meta.pop('old_vm_state', None)
-
-            instance.system_metadata = sys_meta
+            old_instance_type = instance.old_flavor
+            instance.old_flavor = None
+            instance.new_flavor = None
+            instance.system_metadata.pop('old_vm_state', None)
             instance.save()
 
             # NOTE(tr3buchet): tear down networks on source host
@@ -3581,20 +3561,15 @@ class ComputeManager(manager.Manager):
             self._notify_about_instance_usage(
                     context, instance, "resize.revert.start")
 
-            sys_meta, instance_type, drop_instance_type = (
-                self._cleanup_stored_instance_types(instance, True))
-
             # NOTE(mriedem): delete stashed old_vm_state information; we
             # default to ACTIVE for backwards compatibility if old_vm_state
             # is not set
-            old_vm_state = sys_meta.pop('old_vm_state', vm_states.ACTIVE)
+            old_vm_state = instance.system_metadata.pop('old_vm_state',
+                                                        vm_states.ACTIVE)
 
-            instance.system_metadata = sys_meta
-            instance.memory_mb = instance_type.memory_mb
-            instance.vcpus = instance_type.vcpus
-            instance.root_gb = instance_type.root_gb
-            instance.ephemeral_gb = instance_type.ephemeral_gb
-            instance.instance_type_id = instance_type.id
+            self._set_instance_info(instance, instance.old_flavor)
+            instance.old_flavor = None
+            instance.new_flavor = None
             instance.host = migration.source_compute
             instance.node = migration.source_node
             instance.save()
@@ -3661,7 +3636,7 @@ class ComputeManager(manager.Manager):
 
         # NOTE(danms): Stash the new instance_type to avoid having to
         # look it up in the database later
-        instance.set_flavor(instance_type, 'new')
+        instance.new_flavor = instance_type
         # NOTE(mriedem): Stash the old vm_state so we can set the
         # resized/reverted instance back to the same state later.
         vm_state = instance.vm_state
@@ -3867,7 +3842,7 @@ class ComputeManager(manager.Manager):
         instance.vcpus = instance_type.vcpus
         instance.root_gb = instance_type.root_gb
         instance.ephemeral_gb = instance_type.ephemeral_gb
-        instance.set_flavor(instance_type)
+        instance.flavor = instance_type
 
     def _finish_resize(self, context, instance, migration, disk_info,
                        image):
@@ -3880,7 +3855,7 @@ class ComputeManager(manager.Manager):
         # to ACTIVE for backwards compatibility
         old_vm_state = instance.system_metadata.get('old_vm_state',
                                                     vm_states.ACTIVE)
-        instance.set_flavor(old_instance_type, 'old')
+        instance.old_flavor = old_instance_type
 
         if old_instance_type_id != new_instance_type_id:
             instance_type = instance.get_flavor('new')
@@ -5001,6 +4976,13 @@ class ComputeManager(manager.Manager):
         :param disk_over_commit: if true, allow disk over commit
         :returns: a dict containing migration info
         """
+        return self._do_check_can_live_migrate_destination(ctxt, instance,
+                                                            block_migration,
+                                                            disk_over_commit)
+
+    def _do_check_can_live_migrate_destination(self, ctxt, instance,
+                                               block_migration,
+                                               disk_over_commit):
         src_compute_info = obj_base.obj_to_primitive(
             self._get_compute_info(ctxt, instance.host))
         dst_compute_info = obj_base.obj_to_primitive(

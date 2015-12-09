@@ -85,6 +85,33 @@ Database Schema
   layer so that an object can load from either the old or new
   location, and save to the new one.
 
+REST API
+=========
+
+When making a change to the nova API, we should always follow
+`the API WG guidelines <https://specs.openstack.org/openstack/api-wg/>`_
+rather than going for "local" consistency.
+Developers and reviewers should read all of the guidelines, but they are
+very long. So here are some key points:
+
+* `Terms <https://specs.openstack.org/openstack/api-wg/guidelines/terms.html>`_
+
+    * ``project`` should be used in the REST API instead of ``tenant``.
+    * ``server`` should be used in the REST API instead of ``instance``.
+
+* `Naming Conventions <https://specs.openstack.org/openstack/api-wg/guidelines/naming.html>`_
+
+    * URL should not include underscores; use hyphens ('-') instead.
+    * The field names contained in a request/response body should
+      use snake_case style, not CamelCase or Mixed_Case style.
+
+* `HTTP Response Codes <http://specs.openstack.org/openstack/api-wg/guidelines/http.html#http-response-codes>`_
+
+    * Synchronous resource creation: ``201 Created``
+    * Asynchronous resource creation: ``202 Accepted``
+    * Synchronous resource deletion: ``204 No Content``
+    * For all other successful operations: ``200 OK``
+
 Config Options
 ==============
 
@@ -151,6 +178,14 @@ Please note:
   a third party test to report in a timely manner should not block others.
 * We are only talking about the testing of in-tree code. Please note the only
   public API is our REST API, see: :doc:`policies`
+
+Microversion API
+================
+
+* If an new microversion API is added, the following needs to happen:
+
+ * A new patch for the microversion API change in python-novaclient side
+   should be submitted.
 
 Release Notes
 =============
