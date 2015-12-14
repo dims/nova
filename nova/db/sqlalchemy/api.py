@@ -159,22 +159,21 @@ def configure(conf):
 
 
 def get_engine(use_slave=False):
-    return main_context_manager._factory.get_legacy_facade().get_engine(
+    return main_context_manager.get_legacy_facade().get_engine(
         use_slave=use_slave)
 
 
 def get_api_engine():
-    return api_context_manager._factory.get_legacy_facade().get_engine()
+    return api_context_manager.get_legacy_facade().get_engine()
 
 
 def get_session(use_slave=False, **kwargs):
-    return main_context_manager._factory.get_legacy_facade().get_session(
+    return main_context_manager.get_legacy_facade().get_session(
         use_slave=use_slave, **kwargs)
 
 
 def get_api_session(**kwargs):
-    return api_context_manager._factory.get_legacy_facade().get_session(
-        **kwargs)
+    return api_context_manager.get_legacy_facade().get_session(**kwargs)
 
 
 _SHADOW_TABLE_PREFIX = 'shadow_'
@@ -724,7 +723,7 @@ def floating_ip_get(context, id):
         if not result:
             raise exception.FloatingIpNotFound(id=id)
     except db_exc.DBError:
-        msg = _LW("Invalid floating ip id %s in request") % id
+        msg = _LW("Invalid floating IP ID %s in request") % id
         LOG.warn(msg)
         raise exception.InvalidID(id=id)
     return result
@@ -1091,7 +1090,7 @@ def fixed_ip_associate(context, address, instance_uuid, network_id=None,
                        reserved=False, virtual_interface_id=None):
     """Keyword arguments:
     reserved -- should be a boolean value(True or False), exact value will be
-    used to filter on the fixed ip address
+    used to filter on the fixed IP address
     """
     if not uuidutils.is_uuid_like(instance_uuid):
         raise exception.InvalidUUID(uuid=instance_uuid)
@@ -2202,7 +2201,7 @@ def _exact_instance_filter(query, filters, legal_keys):
             column_attr = getattr(model, key)
             if isinstance(value, list):
                 for item in value:
-                    for k, v in item.iteritems():
+                    for k, v in item.items():
                         query = query.filter(column_attr.any(key=k))
                         query = query.filter(column_attr.any(value=v))
 

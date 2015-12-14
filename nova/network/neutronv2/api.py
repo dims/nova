@@ -20,7 +20,6 @@ import time
 import uuid
 
 from keystoneclient import auth
-from keystoneclient.auth.identity import v2 as v2_auth
 from keystoneclient.auth import token_endpoint
 from keystoneclient import session
 from neutronclient.common import exceptions as neutron_client_exc
@@ -48,71 +47,8 @@ neutron_opts = [
     cfg.StrOpt('url',
                default='http://127.0.0.1:9696',
                help='URL for connecting to neutron'),
-    # deprecated in Kilo, may be removed in Mitaka
-    # NOTE(mikal): we could have removed in Liberty, but we forgot to set
-    # deprecated_for_removal for this flag so no warnings were emitted.
-    cfg.StrOpt('admin_user_id',
-               deprecated_for_removal=True,
-               help='User id for connecting to neutron in admin context. '
-                    'DEPRECATED: specify an auth_plugin and appropriate '
-                    'credentials instead.'),
-    # deprecated in Kilo, may be removed in Mitaka
-    # NOTE(mikal): we could have removed in Liberty, but we forgot to set
-    # deprecated_for_removal for this flag so no warnings were emitted.
-    cfg.StrOpt('admin_username',
-               deprecated_for_removal=True,
-               help='Username for connecting to neutron in admin context '
-                    'DEPRECATED: specify an auth_plugin and appropriate '
-                    'credentials instead.'),
-    # deprecated in Kilo, may be removed in Mitaka
-    # NOTE(mikal): we could have removed in Liberty, but we forgot to set
-    # deprecated_for_removal for this flag so no warnings were emitted.
-    cfg.StrOpt('admin_password',
-               deprecated_for_removal=True,
-               help='Password for connecting to neutron in admin context '
-                    'DEPRECATED: specify an auth_plugin and appropriate '
-                    'credentials instead.',
-               secret=True),
-    # deprecated in Kilo, may be removed in Mitaka
-    # NOTE(mikal): we could have removed in Liberty, but we forgot to set
-    # deprecated_for_removal for this flag so no warnings were emitted.
-    cfg.StrOpt('admin_tenant_id',
-               deprecated_for_removal=True,
-               help='Tenant id for connecting to neutron in admin context '
-                    'DEPRECATED: specify an auth_plugin and appropriate '
-                    'credentials instead.'),
-    # deprecated in Kilo, may be removed in Mitaka
-    # NOTE(mikal): we could have removed in Liberty, but we forgot to set
-    # deprecated_for_removal for this flag so no warnings were emitted.
-    cfg.StrOpt('admin_tenant_name',
-               deprecated_for_removal=True,
-               help='Tenant name for connecting to neutron in admin context. '
-                    'This option will be ignored if neutron_admin_tenant_id '
-                    'is set. Note that with Keystone V3 tenant names are '
-                    'only unique within a domain. '
-                    'DEPRECATED: specify an auth_plugin and appropriate '
-                    'credentials instead.'),
     cfg.StrOpt('region_name',
                help='Region name for connecting to neutron in admin context'),
-    # deprecated in Kilo, may be removed in Mitaka
-    # NOTE(mikal): we could have removed in Liberty, but we forgot to set
-    # deprecated_for_removal for this flag so no warnings were emitted.
-    cfg.StrOpt('admin_auth_url',
-               default='http://localhost:5000/v2.0',
-               deprecated_for_removal=True,
-               help='Authorization URL for connecting to neutron in admin '
-                    'context. DEPRECATED: specify an auth_plugin and '
-                    'appropriate credentials instead.'),
-    # deprecated in Kilo, may be removed in Mitaka
-    # NOTE(mikal): we could have removed in Liberty, but we forgot to set
-    # deprecated_for_removal for this flag so no warnings were emitted.
-    cfg.StrOpt('auth_strategy',
-               default='keystone',
-               deprecated_for_removal=True,
-               help='Authorization strategy for connecting to neutron in '
-                    'admin context. DEPRECATED: specify an auth_plugin and '
-                    'appropriate credentials instead. If an auth_plugin is '
-                    'specified strategy will be ignored.'),
     # TODO(berrange) temporary hack until Neutron can pass over the
     # name of the OVS bridge it is configured with
     cfg.StrOpt('ovs_bridge',
@@ -185,26 +121,7 @@ def _load_auth_plugin(conf):
     if auth_plugin:
         return auth_plugin
 
-    if conf.neutron.auth_strategy == 'noauth':
-        if not conf.neutron.url:
-            message = _('For "noauth" authentication strategy, the '
-                        'endpoint must be specified conf.neutron.url')
-            raise neutron_client_exc.Unauthorized(message=message)
-
-        # NOTE(jamielennox): This will actually send 'noauth' as the token
-        # value because the plugin requires you to send something. It doesn't
-        # matter as it will be ignored anyway.
-        return token_endpoint.Token(conf.neutron.url, 'noauth')
-
-    if conf.neutron.auth_strategy in ('keystone', None):
-        return v2_auth.Password(auth_url=conf.neutron.admin_auth_url,
-                                user_id=conf.neutron.admin_user_id,
-                                username=conf.neutron.admin_username,
-                                password=conf.neutron.admin_password,
-                                tenant_id=conf.neutron.admin_tenant_id,
-                                tenant_name=conf.neutron.admin_tenant_name)
-
-    err_msg = _('Unknown auth strategy: %s') % conf.neutron.auth_strategy
+    err_msg = _('Unknown auth plugin: %s') % conf.neutron.auth_plugin
     raise neutron_client_exc.Unauthorized(message=err_msg)
 
 
@@ -344,7 +261,7 @@ class API(base_api.NetworkAPI):
                       instance=instance)
             return port_id
         except neutron_client_exc.InvalidIpForNetworkClient:
-            LOG.warning(_LW('Neutron error: %(ip)s is not a valid ip address '
+            LOG.warning(_LW('Neutron error: %(ip)s is not a valid IP address '
                             'for network %(network_id)s.'),
                         {'ip': fixed_ip, 'network_id': network_id},
                         instance=instance)
@@ -970,7 +887,7 @@ class API(base_api.NetworkAPI):
 
     @base_api.refresh_cache
     def add_fixed_ip_to_instance(self, context, instance, network_id):
-        """Add a fixed ip to the instance from specified network."""
+        """Add a fixed IP to the instance from specified network."""
         neutron = get_client(context)
         search_opts = {'network_id': network_id}
         data = neutron.list_subnets(**search_opts)
@@ -1005,7 +922,7 @@ class API(base_api.NetworkAPI):
 
     @base_api.refresh_cache
     def remove_fixed_ip_from_instance(self, context, instance, address):
-        """Remove a fixed ip from the instance."""
+        """Remove a fixed IP from the instance."""
         neutron = get_client(context)
         zone = 'compute:%s' % instance.availability_zone
         search_opts = {'device_id': instance.uuid,
@@ -1202,7 +1119,7 @@ class API(base_api.NetworkAPI):
         return num_instances
 
     def _get_instance_uuids_by_ip(self, context, address):
-        """Retrieve instance uuids associated with the given ip address.
+        """Retrieve instance uuids associated with the given IP address.
 
         :returns: A list of dicts containing the uuids keyed by 'instance_uuid'
                   e.g. [{'instance_uuid': uuid}, ...]
@@ -1235,7 +1152,7 @@ class API(base_api.NetworkAPI):
     def associate_floating_ip(self, context, instance,
                               floating_address, fixed_address,
                               affect_auto_assigned=False):
-        """Associate a floating ip with a fixed ip."""
+        """Associate a floating IP with a fixed IP."""
 
         # Note(amotoki): 'affect_auto_assigned' is not respected
         # since it is not used anywhere in nova code and I could
@@ -1306,7 +1223,7 @@ class API(base_api.NetworkAPI):
         raise NotImplementedError()
 
     def get_fixed_ip(self, context, id):
-        """Get a fixed ip from the id."""
+        """Get a fixed IP from the id."""
         raise NotImplementedError()
 
     def get_fixed_ip_by_address(self, context, address):
@@ -1342,7 +1259,7 @@ class API(base_api.NetworkAPI):
         return {p['id']: p for p in ports}
 
     def get_floating_ip(self, context, id):
-        """Return floating ip object given the floating ip id."""
+        """Return floating IP object given the floating IP id."""
         client = get_client(context)
         try:
             fip = client.show_floatingip(id)['floatingip']
@@ -1365,7 +1282,7 @@ class API(base_api.NetworkAPI):
         return data['networks']
 
     def get_floating_ip_pools(self, context):
-        """Return floating ip pool names."""
+        """Return floating IP pool names."""
         client = get_client(context)
         pools = self._get_floating_ip_pools(client)
         # Note(salv-orlando): Return a list of names to be consistent with
@@ -1395,7 +1312,7 @@ class API(base_api.NetworkAPI):
         return result
 
     def get_floating_ip_by_address(self, context, address):
-        """Return a floating ip given an address."""
+        """Return a floating IP given an address."""
         client = get_client(context)
         fip = self._get_floating_ip_by_address(client, address)
         pool_dict = self._setup_net_dict(client,
@@ -1415,7 +1332,7 @@ class API(base_api.NetworkAPI):
                 for fip in fips]
 
     def get_instance_id_by_floating_address(self, context, address):
-        """Return the instance id a floating ip's fixed ip is allocated to."""
+        """Return the instance id a floating IP's fixed IP is allocated to."""
         client = get_client(context)
         fip = self._get_floating_ip_by_address(client, address)
         if not fip['port_id']:
@@ -1448,7 +1365,7 @@ class API(base_api.NetworkAPI):
             raise exception.NovaException(message=msg)
 
     def allocate_floating_ip(self, context, pool=None):
-        """Add a floating ip to a project from a pool."""
+        """Add a floating IP to a project from a pool."""
         client = get_client(context)
         pool = pool or CONF.default_floating_pool
         pool_id = self._get_floating_ip_pool_id_by_name_or_id(client, pool)
@@ -1467,7 +1384,7 @@ class API(base_api.NetworkAPI):
         return fip['floatingip']['floating_ip_address']
 
     def _safe_get_floating_ips(self, client, **kwargs):
-        """Get floatingip gracefully handling 404 from Neutron."""
+        """Get floating IP gracefully handling 404 from Neutron."""
         try:
             return client.list_floatingips(**kwargs)['floatingips']
         # If a neutron plugin does not implement the L3 API a 404 from
@@ -1485,7 +1402,7 @@ class API(base_api.NetworkAPI):
                                    for k, v in six.iteritems(kwargs)]))
 
     def _get_floating_ip_by_address(self, client, address):
-        """Get floatingip from floating ip address."""
+        """Get floating IP from floating IP address."""
         if not address:
             raise exception.FloatingIpNotFoundForAddress(address=address)
         fips = self._safe_get_floating_ips(client, floating_ip_address=address)
@@ -1496,13 +1413,13 @@ class API(base_api.NetworkAPI):
         return fips[0]
 
     def _get_floating_ips_by_fixed_and_port(self, client, fixed_ip, port):
-        """Get floatingips from fixed ip and port."""
+        """Get floating IPs from fixed IP and port."""
         return self._safe_get_floating_ips(client, fixed_ip_address=fixed_ip,
                                            port_id=port)
 
     def release_floating_ip(self, context, address,
                             affect_auto_assigned=False):
-        """Remove a floating ip with the given address from a project."""
+        """Remove a floating IP with the given address from a project."""
 
         # Note(amotoki): We cannot handle a case where multiple pools
         # have overlapping IP address range. In this case we cannot use
@@ -1517,7 +1434,7 @@ class API(base_api.NetworkAPI):
 
     def disassociate_and_release_floating_ip(self, context, instance,
                                            floating_ip):
-        """Removes (deallocates) and deletes the floating ip.
+        """Removes (deallocates) and deletes the floating IP.
 
         This api call was added to allow this to be done in one operation
         if using neutron.
@@ -1537,7 +1454,7 @@ class API(base_api.NetworkAPI):
     @base_api.refresh_cache
     def disassociate_floating_ip(self, context, instance, address,
                                  affect_auto_assigned=False):
-        """Disassociate a floating ip from the instance."""
+        """Disassociate a floating IP from the instance."""
 
         # Note(amotoki): 'affect_auto_assigned' is not respected
         # since it is not used anywhere in nova code and I could
@@ -1803,7 +1720,7 @@ class API(base_api.NetworkAPI):
     def get_dns_domains(self, context):
         """Return a list of available dns domains.
 
-        These can be used to create DNS entries for floating ips.
+        These can be used to create DNS entries for floating IPs.
         """
         raise NotImplementedError()
 

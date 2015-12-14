@@ -823,7 +823,7 @@ class API(base.Base):
                 return not (bdm.get('boot_index') == 0 and
                             bdm.get('source_type') == 'image')
 
-            block_device_mapping = (
+            block_device_mapping = list(
                 filter(not_image_and_root_bdm, block_device_mapping))
 
         block_device_mapping = self._merge_bdms_lists(
@@ -2443,7 +2443,7 @@ class API(base.Base):
 
             orig_sys_metadata = dict(instance.system_metadata)
             # Remove the old keys
-            for key in instance.system_metadata.keys():
+            for key in list(instance.system_metadata.keys()):
                 if key.startswith(utils.SM_IMAGE_PROP_PREFIX):
                     del instance.system_metadata[key]
 

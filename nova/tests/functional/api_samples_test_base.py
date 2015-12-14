@@ -32,7 +32,7 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
     all_extensions = False
     extension_name = None
     sample_dir = None
-    request_api_version = None
+    microversion = None
     _use_common_server_api_samples = False
 
     def _pretty_data(self, data):
@@ -110,18 +110,18 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
                                     api_version=api_version)
 
     def _read_template(self, name):
-        template = self._get_template(name, self.request_api_version)
+        template = self._get_template(name, self.microversion)
         with open(template) as inf:
             return inf.read().strip()
 
     def _write_template(self, name, data):
         with open(self._get_template(name,
-                                     self.request_api_version), 'w') as outf:
+                                     self.microversion), 'w') as outf:
             outf.write(data)
 
     def _write_sample(self, name, data):
         with open(self._get_sample(
-            name, self.request_api_version), 'w') as outf:
+            name, self.microversion), 'w') as outf:
             outf.write(data)
 
     def _compare_result(self, subs, expected, result, result_str):
@@ -247,12 +247,19 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
         """
         return subs
 
+    def _update_links(self, sample_data):
+        """Process sample data and update version specific links."""
+        url_re = self._get_host() + "/v(2|2\.1)"
+        new_url = self._get_host() + "/" + self.api_major_version
+        updated_data = re.sub(url_re, new_url, sample_data)
+        return updated_data
+
     def _verify_response(self, name, subs, response, exp_code):
         self.assertEqual(exp_code, response.status_code)
         response_data = response.content
         response_data = self._pretty_data(response_data)
         if not os.path.exists(self._get_template(name,
-                                                 self.request_api_version)):
+                                                 self.microversion)):
             self._write_template(name, response_data)
             template_data = response_data
         else:
@@ -260,13 +267,14 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
 
         if (self.generate_samples and
                 not os.path.exists(self._get_sample(
-                    name, self.request_api_version))):
+                    name, self.microversion))):
             self._write_sample(name, response_data)
             sample_data = response_data
         else:
             with file(self._get_sample(name,
-                                       self.request_api_version)) as sample:
+                                       self.microversion)) as sample:
                 sample_data = sample.read()
+                sample_data = self._update_links(sample_data)
 
         try:
             template_data = self._objectify(template_data)
@@ -329,13 +337,27 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
                            '[0-9a-f]{2}',
             'keypair_type': 'ssh|x509',
             'host': self._get_host(),
-            'host_name': '[0-9a-z]{32}',
+            'host_name': r'\w+',
             'glance_host': self._get_glance_host(),
             'compute_host': self.compute.host,
             'text': text,
             'int': '[0-9]+',
             'user_id': text,
+            'api_vers': self.api_major_version,
+            'compute_endpoint': self._get_compute_endpoint(),
+            'versioned_compute_endpoint': self._get_vers_compute_endpoint(),
         }
+
+    def _get_compute_endpoint(self):
+        # NOTE(sdague): "openstack" is stand in for project_id, it
+        # should be more generic in future.
+        return '%s/%s' % (self._get_host(), 'openstack')
+
+    def _get_vers_compute_endpoint(self):
+        # NOTE(sdague): "openstack" is stand in for project_id, it
+        # should be more generic in future.
+        return '%s/%s/%s' % (self._get_host(), self.api_major_version,
+                             'openstack')
 
     def _get_response(self, url, method, body=None, strip_version=False,
                       api_version=None, headers=None):
@@ -351,35 +373,35 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
                     headers=None):
         return self._get_response(url, 'OPTIONS', strip_version=strip_version,
                                   api_version=(api_version or
-                                               self.request_api_version),
+                                               self.microversion),
                                   headers=headers)
 
     def _do_get(self, url, strip_version=False, api_version=None,
                 headers=None):
         return self._get_response(url, 'GET', strip_version=strip_version,
                                   api_version=(api_version or
-                                               self.request_api_version),
+                                               self.microversion),
                                   headers=headers)
 
     def _do_post(self, url, name, subs, method='POST', api_version=None,
                  headers=None):
         body = self._read_template(name) % subs
-        sample = self._get_sample(name, self.request_api_version)
+        sample = self._get_sample(name, self.microversion)
         if self.generate_samples and not os.path.exists(sample):
                 self._write_sample(name, body)
         return self._get_response(url, method, body,
                                   api_version=(api_version or
-                                               self.request_api_version),
+                                               self.microversion),
                                   headers=headers)
 
     def _do_put(self, url, name, subs, api_version=None, headers=None):
         return self._do_post(url, name, subs, method='PUT',
                              api_version=(api_version or
-                                          self.request_api_version),
+                                          self.microversion),
                              headers=headers)
 
     def _do_delete(self, url, api_version=None, headers=None):
         return self._get_response(url, 'DELETE',
                                   api_version=(api_version or
-                                               self.request_api_version),
+                                               self.microversion),
                                   headers=headers)
