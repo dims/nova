@@ -148,7 +148,7 @@ Server actions
 
 -  **Evacuate**
 
-   Should a compute node actually go offline, it can no longer report
+   Should a nova-compute service actually go offline, it can no longer report
    status about any of the servers on it. This means they'll be
    listed in an 'ACTIVE' state forever.
 
@@ -173,10 +173,10 @@ Server actions
    spawned in the virt layer and revert all changes, the original server
    will still be used from then on.
 
-   Also, there there is a periodic task configured by param
-   CONF.resize_confirm_window(in seconds), if this value is not 0, nova compute
+   Also, there there is a periodic task configured by configuration option
+   resize_confirm_window(in seconds), if this value is not 0, nova compute
    will check whether the server is in resized state longer than
-   CONF.resize_confirm_window, it will automatically confirm the resize
+   value of resize_confirm_window, it will automatically confirm the resize
    of the server.
 
 -  **Pause**, **Unpause**
@@ -223,13 +223,13 @@ Server actions
    Power off the given server first then detach all the resources associated
    to the server such as network and volumes, then delete the server.
 
-   CONF.reclaim_instance_interval (in seconds) decides whether the server to
-   be deleted will still be in the system. If this value is greater than 0,
-   the deleted server will not be deleted immediately, instead it will be put
-   into a queue until it's too old(deleted time greater than the value of
-   CONF.reclaim_instance_interval). Administrator is able to use Restore action
-   to recover the server from the delete queue. If the deleted server stays
-   more than the CONF.reclaim_instance_interval, it will be deleted by compute
+   The configuration option 'reclaim_instance_interval' (in seconds) decides whether
+   the server to be deleted will still be in the system. If this value is greater
+   than 0, the deleted server will not be deleted immediately, instead it will be
+   put into a queue until it's too old (deleted time greater than the value of
+   reclaim_instance_interval). Administrator is able to use Restore action to
+   recover the server from the delete queue. If the deleted server remains
+   longer than the value of reclaim_instance_interval, it will be deleted by compute
    service automatically.
 
 -  **Shelve**, **Shelve offload**, **Unshelve**
@@ -237,6 +237,13 @@ Server actions
    Shelving an server indicates it will not be needed for some time and may be
    temporarily removed from the hypervisors. This allows its resources to
    be freed up for use by someone else.
+
+   By default the configuration option 'shelved_offload_time' is 0 and the shelved
+   server will be removed from the hypervisor immediately after shelve operation;
+   Otherwise, the resource will be kept for the value of 'shelved_offload_time'
+   (in seconds) so that during the time period the unshelve action will be faster,
+   then the periodic task will remove the server from hypervisor. Set the option
+   'shelved_offload_time' to -1 make it never offload.
 
    Shelve will power off the given server and take a snapshot if it is booted
    from image. The server can then be offloaded from the compute host and its
@@ -255,10 +262,12 @@ Server actions
 -  **Lock**, **Unlock**
 
    Lock a server so no further actions are allowed to the server. This can
-   be done by either administrator or the server's owner.
+   be done by either administrator or the server's owner. By default, only owner
+   or administrator can lock the sever, and administrator can overwrite owner's lock.
 
-   Unlock will unlock an server in locked state so additional
-   operations can be performed on the server.
+   Unlock will unlock a server in locked state so additional
+   operations can be performed on the server. By default, only owner or
+   administrator can unlock the server.
 
 -  **Rescue**, **Unrescue**
 
@@ -332,24 +341,6 @@ Networks to which the server connects can also be supplied at launch
 time. One or more networks can be specified. User can also specify a
 specific port on the network or the fixed IP address to assign to the
 server interface.
-
-Server personality
-~~~~~~~~~~~~~~~~~~
-
-You can customize the personality of a server by injecting data
-into its file system. For example, you might want to insert ssh keys,
-set configuration files, or store data that you want to retrieve from
-inside the server. This feature provides a minimal amount of
-launch-time personalization. If you require significant customization,
-create a custom image.
-
-Follow these guidelines when you inject files:
-
--  The maximum size of the file path data is 255 bytes.
-
--  Encode the file contents as a Base64 string. The maximum size of the
-   file contents is determined by the compute provider and may vary
-   based on the image that is used to create the server
 
 Considerations
 ~~~~~~~~~~~~~~
@@ -602,3 +593,46 @@ of resources on single hosts due to moving out old servers.
 Shelving a server is not normally a choice that is available to
 the cloud operator because it affects the availability of the server
 being provided to the user.
+
+Configure Guest OS
+~~~~~~~~~~~~~~~~~~
+
+Metadata API
+------------
+
+TODO
+
+Config Drive
+------------
+
+TODO
+
+User data
+---------
+A user data file is a special key in the metadata service that holds a file
+that cloud-aware applications in the server can access.
+
+Nova has two ways to send user data to the deployed server, one is by
+metadata service to let server able to access to its metadata through
+a predefined ip address (169.254.169.254), then other way is to use config
+drive which will wrap metadata into a iso9660 or vfat format disk so that
+the deployed server can consume it by active engines such as cloud-init
+during its boot process.
+
+Server personality
+------------------
+
+You can customize the personality of a server by injecting data
+into its file system. For example, you might want to insert ssh keys,
+set configuration files, or store data that you want to retrieve from
+inside the server. This feature provides a minimal amount of
+launch-time personalization. If you require significant customization,
+create a custom image.
+
+Follow these guidelines when you inject files:
+
+-  The maximum size of the file path data is 255 bytes.
+
+-  Encode the file contents as a Base64 string. The maximum size of the
+   file contents is determined by the compute provider and may vary
+   based on the image that is used to create the server.

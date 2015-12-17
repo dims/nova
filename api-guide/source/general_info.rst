@@ -39,6 +39,11 @@ several key concepts:
    unique combination of disk space, memory capacity and priority for
    CPU time.
 
+-  **Flavor Extra Specs**
+
+   TODO: Short description at here. The detail reference to
+   :doc:`extra_specs_and_properties`
+
 -  **Image**
 
    A collection of files used to create or rebuild a server. Operators
@@ -47,6 +52,11 @@ several key concepts:
    custom images are useful for backup purposes or for producing “gold”
    server images if you plan to deploy a particular server configuration
    frequently.
+
+-  **Image Properties**
+
+   TODO: Short description at here. The detail reference to
+   :doc:`extra_specs_and_properties`
 
 -  **Key Pair**
 
@@ -85,17 +95,6 @@ several key concepts:
    resources for fault tolerance in case one zone is unavailable for any
    reason. Such a separation is possible in Nova if an administrator carefully
    sets up availability zones for that, but it is not the default.
-
--  **User data**
-   A user data file is a special key in the metadata service that holds a file
-   that cloud-aware applications in the server can access.
-
-   Nova has two ways to send user data to the deploying instance, one is by
-   metadata service to let server able to connect to its metadata through
-   a predefined ip address (169.254.169.254), then other is to use config
-   drive which will wrap metadata into a iso9660 or vfat format disk so that
-   the new deployed server can consume it by active engines such as cloud-init
-   during its boot process.
 
 Networking Concepts
 -------------------

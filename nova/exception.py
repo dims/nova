@@ -23,6 +23,7 @@ SHOULD include dedicated exception logging.
 """
 
 import functools
+import inspect
 import sys
 
 from oslo_config import cfg
@@ -90,8 +91,12 @@ def wrap_exception(notifier=None, get_notifier=None):
                 with excutils.save_and_reraise_exception():
                     if notifier or get_notifier:
                         payload = dict(exception=e)
-                        call_dict = safe_utils.getcallargs(f, context,
-                                                           *args, **kw)
+                        wrapped_func = safe_utils.get_wrapped_function(f)
+                        call_dict = inspect.getcallargs(wrapped_func, self,
+                                                        context, *args, **kw)
+                        # self can't be serialized and shouldn't be in the
+                        # payload
+                        call_dict.pop('self', None)
                         cleansed = _cleanse_dict(call_dict)
                         payload.update({'args': cleansed})
 
@@ -1999,3 +2004,7 @@ class RealtimeConfigurationInvalid(Invalid):
 
 class RequestSpecNotFound(NotFound):
     msg_fmt = _("RequestSpec not found for instance %(instance_uuid)s")
+
+
+class NMINotSupported(Invalid):
+    msg_fmt = _("Injecting NMI is not supported")

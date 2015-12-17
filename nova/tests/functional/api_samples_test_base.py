@@ -28,7 +28,6 @@ class NoMatch(test.TestingException):
 
 
 class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
-    ctype = 'json'
     all_extensions = False
     extension_name = None
     sample_dir = None
@@ -91,7 +90,7 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
                 parts.append(cls.extension_name)
             if api_version:
                 parts.append('v' + api_version)
-        parts.append(name + "." + cls.ctype + suffix)
+        parts.append(name + ".json" + suffix)
         return os.path.join(*parts)
 
     @classmethod
@@ -249,12 +248,13 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
 
     def _update_links(self, sample_data):
         """Process sample data and update version specific links."""
-        url_re = self._get_host() + "/v(2|2\.1)"
+        url_re = self._get_host() + "/v(2\.1|2)"
         new_url = self._get_host() + "/" + self.api_major_version
         updated_data = re.sub(url_re, new_url, sample_data)
         return updated_data
 
-    def _verify_response(self, name, subs, response, exp_code):
+    def _verify_response(self, name, subs, response, exp_code,
+                         update_links=True):
         self.assertEqual(exp_code, response.status_code)
         response_data = response.content
         response_data = self._pretty_data(response_data)
@@ -274,7 +274,8 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
             with file(self._get_sample(name,
                                        self.microversion)) as sample:
                 sample_data = sample.read()
-                sample_data = self._update_links(sample_data)
+                if update_links:
+                    sample_data = self._update_links(sample_data)
 
         try:
             template_data = self._objectify(template_data)
@@ -302,10 +303,7 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
         return 'http://glance.openstack.example.com'
 
     def _get_regexes(self):
-        if self.ctype == 'json':
-            text = r'(\\"|[^"])*'
-        else:
-            text = r'[^<]*'
+        text = r'(\\"|[^"])*'
         isotime_re = '\d{4}-[0,1]\d-[0-3]\dT\d{2}:\d{2}:\d{2}Z'
         strtime_re = '\d{4}-[0,1]\d-[0-3]\dT\d{2}:\d{2}:\d{2}\.\d{6}'
         xmltime_re = ('\d{4}-[0,1]\d-[0-3]\d '
@@ -362,8 +360,8 @@ class ApiSampleTestBase(integrated_helpers._IntegratedTestBase):
     def _get_response(self, url, method, body=None, strip_version=False,
                       api_version=None, headers=None):
         headers = headers or {}
-        headers['Content-Type'] = 'application/' + self.ctype
-        headers['Accept'] = 'application/' + self.ctype
+        headers['Content-Type'] = 'application/json'
+        headers['Accept'] = 'application/json'
         if api_version:
             headers['X-OpenStack-Nova-API-Version'] = api_version
         return self.api.api_request(url, body=body, method=method,

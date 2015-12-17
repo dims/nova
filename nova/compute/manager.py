@@ -28,6 +28,7 @@ terminating it.
 import base64
 import contextlib
 import functools
+import inspect
 import socket
 import sys
 import time
@@ -287,9 +288,9 @@ def errors_out_migration(function):
             return function(self, context, *args, **kwargs)
         except Exception as ex:
             with excutils.save_and_reraise_exception():
-                wrapped_func = utils.get_wrapped_function(function)
-                keyed_args = safe_utils.getcallargs(wrapped_func, context,
-                                                    *args, **kwargs)
+                wrapped_func = safe_utils.get_wrapped_function(function)
+                keyed_args = inspect.getcallargs(wrapped_func, self, context,
+                                                 *args, **kwargs)
                 migration = keyed_args['migration']
 
                 # NOTE(rajesht): If InstanceNotFound error is thrown from
@@ -329,9 +330,9 @@ def reverts_task_state(function):
                          e.format_message())
         except Exception:
             with excutils.save_and_reraise_exception():
-                wrapped_func = utils.get_wrapped_function(function)
-                keyed_args = safe_utils.getcallargs(wrapped_func, context,
-                                                    *args, **kwargs)
+                wrapped_func = safe_utils.get_wrapped_function(function)
+                keyed_args = inspect.getcallargs(wrapped_func, self, context,
+                                                 *args, **kwargs)
                 # NOTE(mriedem): 'instance' must be in keyed_args because we
                 # have utils.expects_func_args('instance') decorating this
                 # method.
@@ -389,9 +390,9 @@ def wrap_instance_event(function):
 
     @functools.wraps(function)
     def decorated_function(self, context, *args, **kwargs):
-        wrapped_func = utils.get_wrapped_function(function)
-        keyed_args = safe_utils.getcallargs(wrapped_func, context, *args,
-                                       **kwargs)
+        wrapped_func = safe_utils.get_wrapped_function(function)
+        keyed_args = inspect.getcallargs(wrapped_func, self, context, *args,
+                                         **kwargs)
         instance_uuid = keyed_args['instance']['uuid']
 
         event_name = 'compute_{0}'.format(function.__name__)
@@ -1061,6 +1062,7 @@ class ComputeManager(manager.Manager):
                           task_states.REBOOTING]
             if instance.task_state in soft_types and reboot_type == 'HARD':
                 instance.task_state = task_states.REBOOT_PENDING_HARD
+                instance.save()
 
             self.reboot_instance(context, instance, block_device_info=None,
                                  reboot_type=reboot_type)
@@ -2618,6 +2620,18 @@ class ComputeManager(manager.Manager):
         instance.save(expected_task_state=task_states.RESTORING)
         self._notify_about_instance_usage(context, instance, "restore.end")
 
+    @staticmethod
+    def _set_migration_status(migration, status):
+        """Set the status, and guard against a None being passed in.
+
+        This is useful as some of the compute RPC calls will not pass
+        a migration object in older versions. The check can be removed when
+        we move past 4.x major version of the RPC API.
+        """
+        if migration:
+            migration.status = status
+            migration.save()
+
     def _rebuild_default_impl(self, context, instance, image_meta,
                               injected_files, admin_password, bdms,
                               detach_block_devices, attach_block_devices,
@@ -2717,11 +2731,6 @@ class ComputeManager(manager.Manager):
                 LOG.exception(_LE('Failed to get compute_info for %s'),
                                 self.host)
 
-        def _fail_migration(migration):
-            if migration:
-                migration.status = 'failed'
-                migration.save()
-
         with self._error_out_instance_on_exception(context, instance):
             try:
                 claim_ctxt = rebuild_claim(
@@ -2737,14 +2746,14 @@ class ComputeManager(manager.Manager):
 
                 # NOTE(ndipanov): We just abort the build for now and leave a
                 # migration record for potential cleanup later
-                _fail_migration(migration)
+                self._set_migration_status(migration, 'failed')
 
                 self._notify_about_instance_usage(context, instance,
                         'rebuild.error', fault=e)
                 raise exception.BuildAbortException(
                     instance_uuid=instance.uuid, reason=e.format_message())
             except Exception as e:
-                _fail_migration(migration)
+                self._set_migration_status(migration, 'failed')
                 self._notify_about_instance_usage(context, instance,
                         'rebuild.error', fault=e)
                 raise
@@ -2761,9 +2770,7 @@ class ComputeManager(manager.Manager):
 
                 # NOTE (ndipanov): Mark the migration as done only after we
                 # mark the instance as belonging to this host.
-                if migration:
-                    migration.status = 'done'
-                    migration.save()
+                self._set_migration_status(migration, 'done')
 
     def _do_rebuild_instance_with_claim(self, claim_context, *args, **kwargs):
         """Helper to avoid deep nesting in the top-level method."""
@@ -5094,14 +5101,11 @@ class ComputeManager(manager.Manager):
 
     def _do_live_migration(self, context, dest, instance, block_migration,
                            migration, migrate_data):
-        # NOTE(danms): Remove these guards in v5.0 of the RPC API
-        if migration:
-            # NOTE(danms): We should enhance the RT to account for migrations
-            # and use the status field to denote when the accounting has been
-            # done on source/destination. For now, this is just here for status
-            # reporting
-            migration.status = 'preparing'
-            migration.save()
+        # NOTE(danms): We should enhance the RT to account for migrations
+        # and use the status field to denote when the accounting has been
+        # done on source/destination. For now, this is just here for status
+        # reporting
+        self._set_migration_status(migration, 'preparing')
 
         # Create a local copy since we'll be modifying the dictionary
         migrate_data = dict(migrate_data or {})
@@ -5123,15 +5127,11 @@ class ComputeManager(manager.Manager):
             with excutils.save_and_reraise_exception():
                 LOG.exception(_LE('Pre live migration failed at %s'),
                               dest, instance=instance)
-                if migration:
-                    migration.status = 'failed'
-                    migration.save()
+                self._set_migration_status(migration, 'failed')
                 self._rollback_live_migration(context, instance, dest,
                                               block_migration, migrate_data)
 
-        if migration:
-            migration.status = 'running'
-            migration.save()
+        self._set_migration_status(migration, 'running')
 
         migrate_data['migration'] = migration
         try:
@@ -5145,9 +5145,7 @@ class ComputeManager(manager.Manager):
             # nothing must be recovered in this version.
             LOG.exception(_LE('Live migration failed.'), instance=instance)
             with excutils.save_and_reraise_exception():
-                if migration:
-                    migration.status = 'failed'
-                    migration.save()
+                self._set_migration_status(migration, 'failed')
 
     @wrap_exception()
     @wrap_instance_event
@@ -5164,11 +5162,7 @@ class ComputeManager(manager.Manager):
         :param migrate_data: implementation specific params
 
         """
-
-        # NOTE(danms): Remove these guards in v5.0 of the RPC API
-        if migration:
-            migration.status = 'queued'
-            migration.save()
+        self._set_migration_status(migration, 'queued')
 
         def dispatch_live_migration(*args, **kwargs):
             with self._live_migration_semaphore:
@@ -5453,9 +5447,7 @@ class ComputeManager(manager.Manager):
 
         self._notify_about_instance_usage(context, instance,
                                           "live_migration._rollback.end")
-        if migration:
-            migration.status = 'error'
-            migration.save()
+        self._set_migration_status(migration, 'error')
 
     @wrap_exception()
     @wrap_instance_event

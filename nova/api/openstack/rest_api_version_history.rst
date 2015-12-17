@@ -130,3 +130,17 @@ user documentation.
   Exposes VIF ``net-id`` attribute in ``os-virtual-interfaces``.
   User will be able to get Virtual Interfaces ``net-id`` in Virtual Interfaces
   list and can determine in which network a Virtual Interface is plugged into.
+
+2.13
+----
+
+  Add information ``project_id`` and ``user_id`` to ``os-server-groups``
+  API response data.
+
+2.14
+----
+
+  Remove ``onSharedStorage`` parameter from server's evacuate action. Nova will
+  automatically detect if the instance is on shared storage.
+  Also adminPass is removed from the response body. The user can get the
+  password with the server's os-server-password action.
