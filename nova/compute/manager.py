@@ -85,6 +85,7 @@ from nova.network.security_group import openstack_driver
 from nova import objects
 from nova.objects import base as obj_base
 from nova.objects import instance as obj_instance
+from nova.objects import migrate_data as migrate_data_obj
 from nova import paths
 from nova import rpc
 from nova import safe_utils
@@ -142,8 +143,12 @@ compute_opts = [
                     'environment.'),
     cfg.IntOpt('block_device_allocate_retries',
                default=60,
-               help='Number of times to retry block device'
-                    ' allocation on failures')
+               help='Number of times to retry block device '
+                    'allocation on failures.\n'
+                    'Starting with Liberty, Cinder can use image volume '
+                    'cache. This may help with block device allocation '
+                    'performance. Look at the cinder '
+                    'image_volume_cache_enabled configuration option.')
     ]
 
 interval_opts = [
@@ -2306,23 +2311,6 @@ class ComputeManager(manager.Manager):
         if try_deallocate_networks:
             self._try_deallocate_network(context, instance, requested_networks)
 
-        # NOTE(mriedem): If we are deleting the instance while it was booting
-        # from volume, we could be racing with a database update of the BDM
-        # volume_id. Since the compute API passes the BDMs over RPC to compute
-        # here, the BDMs may be stale at this point. So check for any volume
-        # BDMs that don't have volume_id set and if we detect that, we need to
-        # refresh the BDM list before proceeding with detach.
-        for bdm in list(vol_bdms):
-            if not bdm.volume_id:
-                LOG.debug('There are potentially stale BDMs during delete, '
-                          'refreshing the BlockDeviceMappingList.',
-                          instance=instance)
-                bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
-                    context, instance.uuid)
-                # now filter the list again
-                vol_bdms = [bdm for bdm in bdms if bdm.is_volume]
-                break
-
         timer.restart()
         for bdm in vol_bdms:
             try:
@@ -2458,6 +2446,22 @@ class ComputeManager(manager.Manager):
 
         @utils.synchronized(instance.uuid)
         def do_terminate_instance(instance, bdms):
+            # NOTE(mriedem): If we are deleting the instance while it was
+            # booting from volume, we could be racing with a database update of
+            # the BDM volume_id. Since the compute API passes the BDMs over RPC
+            # to compute here, the BDMs may be stale at this point. So check
+            # for any volume BDMs that don't have volume_id set and if we
+            # detect that, we need to refresh the BDM list before proceeding.
+            # TODO(mriedem): Move this into _delete_instance and make the bdms
+            # parameter optional.
+            for bdm in list(bdms):
+                if bdm.is_volume and not bdm.volume_id:
+                    LOG.debug('There are potentially stale BDMs during '
+                              'delete, refreshing the BlockDeviceMappingList.',
+                              instance=instance)
+                    bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
+                        context, instance.uuid)
+                    break
             try:
                 self._delete_instance(context, instance, bdms, quotas)
             except exception.InstanceNotFound:
@@ -5015,6 +5019,8 @@ class ComputeManager(manager.Manager):
         dest_check_data = self.driver.check_can_live_migrate_destination(ctxt,
             instance, src_compute_info, dst_compute_info,
             block_migration, disk_over_commit)
+        if isinstance(dest_check_data, migrate_data_obj.LiveMigrateData):
+            dest_check_data = dest_check_data.to_legacy_dict()
         migrate_data = {}
         try:
             migrate_data = self.compute_rpcapi.\
@@ -5046,9 +5052,12 @@ class ComputeManager(manager.Manager):
         dest_check_data['is_volume_backed'] = is_volume_backed
         block_device_info = self._get_instance_block_device_info(
                             ctxt, instance, refresh_conn_info=True)
-        return self.driver.check_can_live_migrate_source(ctxt, instance,
-                                                         dest_check_data,
-                                                         block_device_info)
+        result = self.driver.check_can_live_migrate_source(ctxt, instance,
+                                                           dest_check_data,
+                                                           block_device_info)
+        if isinstance(result, migrate_data_obj.LiveMigrateData):
+            result = result.to_legacy_dict()
+        return result
 
     @wrap_exception()
     @wrap_instance_event
@@ -5079,6 +5088,9 @@ class ComputeManager(manager.Manager):
                                        network_info,
                                        disk,
                                        migrate_data)
+        if isinstance(pre_live_migration_data,
+                      migrate_data_obj.LiveMigrateData):
+            pre_live_migration_data = pre_live_migration_data.to_legacy_dict()
 
         # NOTE(tr3buchet): setup networks on destination host
         self.network_api.setup_networks_on_host(context, instance,

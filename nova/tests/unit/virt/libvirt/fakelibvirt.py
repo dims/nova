@@ -773,6 +773,12 @@ class Domain(object):
     def abortJob(self):
         pass
 
+    def fsFreeze(self):
+        pass
+
+    def fsThaw(self):
+        pass
+
 
 class DomainSnapshot(object):
     def __init__(self, name, domain):

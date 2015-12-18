@@ -1394,7 +1394,7 @@ class LibvirtDriver(driver.ComputeDriver):
             # confirms the running instance, as opposed to the system as a
             # whole, has a new enough version of the hypervisor (bug 1193146).
             try:
-                virt_dom.blockJobAbort(disk_path, 0)
+                guest.get_block_device(disk_path).abort_job()
             except libvirt.libvirtError as ex:
                 error_code = ex.get_error_code()
                 if error_code == libvirt.VIR_ERR_CONFIG_UNSUPPORTED:
@@ -1514,15 +1514,10 @@ class LibvirtDriver(driver.ComputeDriver):
         self._can_quiesce(instance, image_meta)
         try:
             guest = self._host.get_guest(instance)
-
-            # TODO(sahid): We are converting all calls from a
-            # virDomain object to use nova.virt.libvirt.Guest.
-            # We should be able to remove domain at the end.
-            domain = guest._domain
             if quiesced:
-                domain.fsFreeze()
+                guest.freeze_filesystems()
             else:
-                domain.fsThaw()
+                guest.thaw_filesystems()
         except libvirt.libvirtError as ex:
             error_code = ex.get_error_code()
             msg = (_('Error from libvirt while quiescing %(instance_name)s: '
@@ -1625,19 +1620,15 @@ class LibvirtDriver(driver.ComputeDriver):
             LOG.exception(_LE('Failed to send updated snapshot status '
                               'to volume service.'))
 
-    def _volume_snapshot_create(self, context, instance, domain,
+    def _volume_snapshot_create(self, context, instance, guest,
                                 volume_id, new_file):
         """Perform volume snapshot.
 
-           :param domain: VM that volume is attached to
+           :param guest: VM that volume is attached to
            :param volume_id: volume UUID to snapshot
            :param new_file: relative path to new qcow2 file present on share
 
         """
-
-        # TODO(sahid): An object Guest should be passed instead of
-        # a "domain" as virDomain.
-        guest = libvirt_guest.Guest(domain)
         xml = guest.get_xml_desc()
         xml_doc = etree.fromstring(xml)
 
@@ -1720,16 +1711,9 @@ class LibvirtDriver(driver.ComputeDriver):
         snapshot_xml = snapshot.to_xml()
         LOG.debug("snap xml: %s", snapshot_xml, instance=instance)
 
-        snap_flags = (libvirt.VIR_DOMAIN_SNAPSHOT_CREATE_DISK_ONLY |
-                      libvirt.VIR_DOMAIN_SNAPSHOT_CREATE_NO_METADATA |
-                      libvirt.VIR_DOMAIN_SNAPSHOT_CREATE_REUSE_EXT)
-
-        QUIESCE = libvirt.VIR_DOMAIN_SNAPSHOT_CREATE_QUIESCE
-
         try:
-            domain.snapshotCreateXML(snapshot_xml,
-                                     snap_flags | QUIESCE)
-
+            guest.snapshot(snapshot, no_metadata=True, disk_only=True,
+                           reuse_ext=True, quiesce=True)
             return
         except libvirt.libvirtError:
             LOG.exception(_LE('Unable to create quiesced VM snapshot, '
@@ -1737,7 +1721,8 @@ class LibvirtDriver(driver.ComputeDriver):
                           instance=instance)
 
         try:
-            domain.snapshotCreateXML(snapshot_xml, snap_flags)
+            guest.snapshot(snapshot, no_metadata=True, disk_only=True,
+                           reuse_ext=True, quiesce=False)
         except libvirt.libvirtError:
             LOG.exception(_LE('Unable to create VM snapshot, '
                               'failing volume_snapshot operation.'),
@@ -1773,11 +1758,6 @@ class LibvirtDriver(driver.ComputeDriver):
 
         try:
             guest = self._host.get_guest(instance)
-
-            # TODO(sahid): We are converting all calls from a
-            # virDomain object to use nova.virt.libvirt.Guest.
-            # We should be able to remove virt_dom at the end.
-            virt_dom = guest._domain
         except exception.InstanceNotFound:
             raise exception.InstanceNotRunning(instance_id=instance.uuid)
 
@@ -1791,7 +1771,7 @@ class LibvirtDriver(driver.ComputeDriver):
                                             'in create_info'))
 
         try:
-            self._volume_snapshot_create(context, instance, virt_dom,
+            self._volume_snapshot_create(context, instance, guest,
                                          volume_id, create_info['new_file'])
         except Exception:
             with excutils.save_and_reraise_exception():
@@ -2139,16 +2119,12 @@ class LibvirtDriver(driver.ComputeDriver):
         """
         guest = self._host.get_guest(instance)
 
-        # TODO(sahid): We are converting all calls from a
-        # virDomain object to use nova.virt.libvirt.Guest.
-        # We should be able to remove dom at the end.
-        dom = guest._domain
         state = guest.get_power_state(self._host)
-        old_domid = dom.ID()
+        old_domid = guest.id
         # NOTE(vish): This check allows us to reboot an instance that
         #             is already shutdown.
         if state == power_state.RUNNING:
-            dom.shutdown()
+            guest.shutdown()
         # NOTE(vish): This actually could take slightly longer than the
         #             FLAG defines depending on how long the get_info
         #             call takes to return.
@@ -2157,12 +2133,8 @@ class LibvirtDriver(driver.ComputeDriver):
         for x in xrange(CONF.libvirt.wait_soft_reboot_seconds):
             guest = self._host.get_guest(instance)
 
-            # TODO(sahid): We are converting all calls from a
-            # virDomain object to use nova.virt.libvirt.Guest.
-            # We should be able to remove dom at the end.
-            dom = guest._domain
             state = guest.get_power_state(self._host)
-            new_domid = dom.ID()
+            new_domid = guest.id
 
             # NOTE(ivoks): By checking domain IDs, we make sure we are
             #              not recreating domain that's already running.
@@ -2171,7 +2143,7 @@ class LibvirtDriver(driver.ComputeDriver):
                              power_state.CRASHED]:
                     LOG.info(_LI("Instance shutdown successfully."),
                              instance=instance)
-                    self._create_domain(domain=dom)
+                    self._create_domain(domain=guest._domain)
                     timer = loopingcall.FixedIntervalLoopingCall(
                         self._wait_for_running, instance)
                     timer.start(interval=0.5).wait()
@@ -2279,11 +2251,6 @@ class LibvirtDriver(driver.ComputeDriver):
 
         try:
             guest = self._host.get_guest(instance)
-
-            # TODO(sahid): We are converting all calls from a
-            # virDomain object to use nova.virt.libvirt.Guest.
-            # We should be able to remove dom at the end.
-            dom = guest._domain
         except exception.InstanceNotFound:
             # If the instance has gone then we don't need to
             # wait for it to shutdown
@@ -2297,18 +2264,12 @@ class LibvirtDriver(driver.ComputeDriver):
 
         LOG.debug("Shutting down instance from state %s", state,
                   instance=instance)
-        dom.shutdown()
+        guest.shutdown()
         retry_countdown = retry_interval
 
         for sec in six.moves.range(timeout):
 
             guest = self._host.get_guest(instance)
-
-            # TODO(sahid): We are converting all calls from a
-            # virDomain object to use nova.virt.libvirt.Guest.
-            # We should be able to remove dom at the end.
-            dom = guest._domain
-
             state = guest.get_power_state(self._host)
 
             if state in SHUTDOWN_STATES:
@@ -2329,7 +2290,7 @@ class LibvirtDriver(driver.ComputeDriver):
                     LOG.debug("Instance in state %s after %d seconds - "
                               "resending shutdown", state, sec,
                               instance=instance)
-                    dom.shutdown()
+                    guest.shutdown()
                 except libvirt.libvirtError:
                     # Assume this is because its now shutdown, so loop
                     # one more time to clean up.

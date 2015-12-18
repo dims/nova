@@ -42,6 +42,7 @@ from nova.network import api as network_api
 from nova.network import model as network_model
 from nova import objects
 from nova.objects import block_device as block_device_obj
+from nova.objects import migrate_data as migrate_data_obj
 from nova import test
 from nova.tests.unit.compute import fake_resource_tracker
 from nova.tests.unit import fake_block_device
@@ -1102,42 +1103,6 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
     def test_shutdown_instance_disk_not_found(self):
         exc = exception.DiskNotFound
         self._test_shutdown_instance_exception(exc)
-
-    @mock.patch('nova.context.RequestContext.elevated')
-    @mock.patch('nova.compute.utils.get_nw_info_for_instance')
-    @mock.patch(
-        'nova.compute.manager.ComputeManager._get_instance_block_device_info')
-    @mock.patch('nova.virt.driver.ComputeDriver.destroy')
-    @mock.patch('nova.objects.BlockDeviceMappingList.get_by_instance_uuid')
-    @mock.patch('nova.virt.fake.SmallFakeDriver.get_volume_connector')
-    @mock.patch('nova.volume.cinder.API.terminate_connection',
-                side_effect=exception.VolumeNotFound(volume_id=None))
-    def test_shutdown_instance_no_bdm_volume_id(self, mock_terminate,
-            mock_connector, mock_bdm_get_by_inst, mock_destroy,
-            mock_blk_device_info, mock_nw_info, mock_elevated):
-        # Tests that we refresh the bdm list if a volume bdm does not have the
-        # volume_id set.
-        mock_elevated.return_value = self.context
-        instance = fake_instance.fake_instance_obj(
-            self.context, vm_state=vm_states.ERROR,
-            task_state=task_states.DELETING)
-        bdm = fake_block_device.FakeDbBlockDeviceDict(
-            {'source_type': 'snapshot', 'destination_type': 'volume',
-             'instance_uuid': instance.uuid, 'device_name': '/dev/vda'})
-        bdms = block_device_obj.block_device_make_list(self.context, [bdm])
-        # since the bdms passed in don't have a volume_id, we'll go back to the
-        # database looking for updated versions which will be the same so we
-        # get the warning
-        mock_bdm_get_by_inst.return_value = bdms
-        mock_connector.return_value = mock.sentinel.connector
-        self.compute._shutdown_instance(
-            self.context, instance, bdms, notify=False,
-            try_deallocate_networks=False)
-        mock_bdm_get_by_inst.assert_called_once_with(
-            self.context, instance.uuid)
-        mock_connector.assert_called_once_with(instance)
-        mock_terminate.assert_called_once_with(
-            self.context, bdms[0].volume_id, mock.sentinel.connector)
 
     def _test_init_instance_retries_reboot(self, instance, reboot_type,
                                            return_power_state):
@@ -2912,6 +2877,28 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
             mock_rpc.assert_called_once_with()
             self.assertIsNot(orig_rpc, self.compute.compute_rpcapi)
 
+    @mock.patch('nova.objects.BlockDeviceMappingList.get_by_instance_uuid')
+    @mock.patch('nova.compute.manager.ComputeManager._delete_instance')
+    def test_terminate_instance_no_bdm_volume_id(self, mock_delete_instance,
+                                                 mock_bdm_get_by_inst):
+        # Tests that we refresh the bdm list if a volume bdm does not have the
+        # volume_id set.
+        instance = fake_instance.fake_instance_obj(
+            self.context, vm_state=vm_states.ERROR,
+            task_state=task_states.DELETING)
+        bdm = fake_block_device.FakeDbBlockDeviceDict(
+            {'source_type': 'snapshot', 'destination_type': 'volume',
+             'instance_uuid': instance.uuid, 'device_name': '/dev/vda'})
+        bdms = block_device_obj.block_device_make_list(self.context, [bdm])
+        # since the bdms passed in don't have a volume_id, we'll go back to the
+        # database looking for updated versions
+        mock_bdm_get_by_inst.return_value = bdms
+        self.compute.terminate_instance(self.context, instance, bdms, [])
+        mock_bdm_get_by_inst.assert_called_once_with(
+            self.context, instance.uuid)
+        mock_delete_instance.assert_called_once_with(
+            self.context, instance, bdms, mock.ANY)
+
 
 class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
     def setUp(self):
@@ -4266,3 +4253,44 @@ class ComputeManagerMigrationTestCase(test.NoDBTestCase):
         self.assertEqual(0, compute._live_migration_semaphore.balance)
         self.assertIsInstance(compute._live_migration_semaphore,
                               compute_utils.UnlimitedSemaphore)
+
+    def test_check_migrate_source_converts_object(self):
+        # NOTE(danms): Make sure that we legacy-ify any data objects
+        # the drivers give us back, until we're ready for them
+        data = migrate_data_obj.LiveMigrateData(is_volume_backed=False)
+        compute = manager.ComputeManager()
+
+        @mock.patch.object(compute.driver, 'check_can_live_migrate_source')
+        @mock.patch.object(compute, '_get_instance_block_device_info')
+        @mock.patch.object(compute.compute_api, 'is_volume_backed_instance')
+        def _test(mock_ivbi, mock_gibdi, mock_cclms):
+            mock_cclms.return_value = data
+            self.assertIsInstance(
+                compute.check_can_live_migrate_source(
+                    self.context, {'uuid': 'foo'}, {}),
+                dict)
+
+        _test()
+
+    def test_check_migrate_destination_converts_object(self):
+        # NOTE(danms): Make sure that we legacy-ify any data objects
+        # the drivers give us back, until we're ready for them
+        data = migrate_data_obj.LiveMigrateData(is_volume_backed=False)
+        inst = objects.Instance(id=1, uuid='foo', host='bar')
+        compute = manager.ComputeManager()
+
+        @mock.patch.object(compute.driver,
+                           'check_can_live_migrate_destination')
+        @mock.patch.object(compute.compute_rpcapi,
+                           'check_can_live_migrate_source')
+        @mock.patch.object(compute, '_get_compute_info')
+        def _test(mock_gci, mock_cclms, mock_cclmd):
+            mock_gci.return_value = inst
+            mock_cclmd.return_value = data
+            mock_cclms.return_value = {}
+            result = compute.check_can_live_migrate_destination(
+                self.context, inst, False, False)
+            self.assertIsInstance(mock_cclms.call_args_list[0][0][2], dict)
+            self.assertIsInstance(result, dict)
+
+        _test()
