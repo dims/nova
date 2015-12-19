@@ -33,6 +33,7 @@ from oslo_config import cfg
 from oslo_log import log as logging
 import oslo_messaging as messaging
 from oslo_serialization import jsonutils
+from oslo_utils import fixture as utils_fixture
 from oslo_utils import importutils
 from oslo_utils import timeutils
 from oslo_utils import units
@@ -256,7 +257,6 @@ class BaseTestCase(test.TestCase):
         self.rt = self.compute._get_resource_tracker(NODENAME)
 
     def tearDown(self):
-        timeutils.clear_time_override()
         ctxt = context.get_admin_context()
         fake_image.FakeImageService_reset()
         instances = db.instance_get_all(ctxt)
@@ -698,10 +698,8 @@ class ComputeVolumeTestCase(BaseTestCase):
     def test_poll_volume_usage_returns_no_vols(self):
         ctxt = 'MockContext'
         self.mox.StubOutWithMock(self.compute, '_get_host_volume_bdms')
-        self.mox.StubOutWithMock(utils, 'last_completed_audit_period')
         self.mox.StubOutWithMock(self.compute.driver, 'get_all_volume_usage')
         # Following methods are called.
-        utils.last_completed_audit_period().AndReturn((0, 0))
         self.compute._get_host_volume_bdms(ctxt, use_slave=True).AndReturn([])
         self.mox.ReplayAll()
 
@@ -711,13 +709,11 @@ class ComputeVolumeTestCase(BaseTestCase):
 
     def test_poll_volume_usage_with_data(self):
         ctxt = 'MockContext'
-        self.mox.StubOutWithMock(utils, 'last_completed_audit_period')
         self.mox.StubOutWithMock(self.compute, '_get_host_volume_bdms')
         self.mox.StubOutWithMock(self.compute, '_update_volume_usage_cache')
         self.stubs.Set(self.compute.driver, 'get_all_volume_usage',
                        lambda x, y: [3, 4])
         # All the mocks are called
-        utils.last_completed_audit_period().AndReturn((10, 20))
         self.compute._get_host_volume_bdms(ctxt,
                                            use_slave=True).AndReturn([1, 2])
         self.compute._update_volume_usage_cache(ctxt, [3, 4])
@@ -2622,13 +2618,13 @@ class ComputeTestCase(BaseTestCase):
         # Ensure instance can be rebuilt.
         old_time = datetime.datetime(2012, 4, 1)
         cur_time = datetime.datetime(2012, 12, 21, 12, 21)
-        timeutils.set_time_override(old_time)
+        time_fixture = self.useFixture(utils_fixture.TimeFixture(old_time))
         instance = self._create_fake_instance_obj()
         image_ref = instance['image_ref']
 
         self.compute.build_and_run_instance(self.context, instance, {}, {}, {},
                                             block_device_mapping=[])
-        timeutils.set_time_override(cur_time)
+        time_fixture.advance_time_delta(cur_time - old_time)
         db.instance_update(self.context, instance['uuid'],
                            {"task_state": task_states.REBUILDING})
         self.compute.rebuild_instance(self.context, instance,
@@ -3924,13 +3920,13 @@ class ComputeTestCase(BaseTestCase):
         old_time = datetime.datetime(2012, 4, 1)
         cur_time = datetime.datetime(2012, 12, 21, 12, 21)
 
-        timeutils.set_time_override(old_time)
+        time_fixture = self.useFixture(utils_fixture.TimeFixture(old_time))
 
         instance = self._create_fake_instance_obj()
         self.compute.build_and_run_instance(self.context, instance, {}, {}, {},
                                             block_device_mapping=[])
         fake_notifier.NOTIFICATIONS = []
-        timeutils.set_time_override(cur_time)
+        time_fixture.advance_time_delta(cur_time - old_time)
         self.compute.terminate_instance(self.context, instance, [], [])
 
         self.assertEqual(len(fake_notifier.NOTIFICATIONS), 4)
@@ -4810,11 +4806,11 @@ class ComputeTestCase(BaseTestCase):
         # Ensure notifications on instance migrate/resize.
         old_time = datetime.datetime(2012, 4, 1)
         cur_time = datetime.datetime(2012, 12, 21, 12, 21)
-        timeutils.set_time_override(old_time)
+        time_fixture = self.useFixture(utils_fixture.TimeFixture(old_time))
         inst_ref = self._create_fake_instance_obj()
         self.compute.build_and_run_instance(self.context, inst_ref, {}, {}, {},
                                             block_device_mapping=[])
-        timeutils.set_time_override(cur_time)
+        time_fixture.advance_time_delta(cur_time - old_time)
 
         fake_notifier.NOTIFICATIONS = []
         instance = db.instance_get_by_uuid(self.context, inst_ref['uuid'])
@@ -4878,7 +4874,7 @@ class ComputeTestCase(BaseTestCase):
         # Ensure notifications on instance migrate/resize.
         old_time = datetime.datetime(2012, 4, 1)
         cur_time = datetime.datetime(2012, 12, 21, 12, 21)
-        timeutils.set_time_override(old_time)
+        time_fixture = self.useFixture(utils_fixture.TimeFixture(old_time))
         instance = self._create_fake_instance_obj()
         new_type = flavors.get_flavor_by_name('m1.small')
         new_type_id = new_type['id']
@@ -4903,7 +4899,7 @@ class ComputeTestCase(BaseTestCase):
         self.compute.resize_instance(self.context, instance=instance,
                 migration=migration, image={}, instance_type=new_type,
                 reservations=[], clean_shutdown=True)
-        timeutils.set_time_override(cur_time)
+        time_fixture.advance_time_delta(cur_time - old_time)
         fake_notifier.NOTIFICATIONS = []
 
         self.compute.finish_resize(self.context,
@@ -4937,12 +4933,12 @@ class ComputeTestCase(BaseTestCase):
         # Ensure notifications on instance migrate/resize.
         old_time = datetime.datetime(2012, 4, 1)
         cur_time = datetime.datetime(2012, 12, 21, 12, 21)
-        timeutils.set_time_override(old_time)
+        time_fixture = self.useFixture(utils_fixture.TimeFixture(old_time))
         instance = self._create_fake_instance_obj()
 
         self.compute.build_and_run_instance(self.context, instance, {}, {}, {},
                                             block_device_mapping=[])
-        timeutils.set_time_override(cur_time)
+        time_fixture.advance_time_delta(cur_time - old_time)
         fake_notifier.NOTIFICATIONS = []
 
         instance.host = 'foo'

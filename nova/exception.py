@@ -188,7 +188,7 @@ class VirtualInterfacePlugException(NovaException):
 
 
 class GlanceConnectionFailed(NovaException):
-    msg_fmt = _("Connection to glance host %(host)s:%(port)s failed: "
+    msg_fmt = _("Connection to glance host %(server)s failed: "
         "%(reason)s")
 
 
@@ -637,6 +637,14 @@ class VolumeBDMNotFound(NotFound):
 
 class VolumeBDMPathNotFound(VolumeBDMNotFound):
     msg_fmt = _("No volume Block Device Mapping at path: %(path)s")
+
+
+class DeviceDetachFailed(NovaException):
+    msg_fmt = _("Device detach failed for %(device)s: %(reason)s)")
+
+
+class DeviceNotFound(NotFound):
+    msg_fmt = _("Device '%(device)s' not found.")
 
 
 class SnapshotNotFound(NotFound):

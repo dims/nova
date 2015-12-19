@@ -1229,13 +1229,14 @@ class LibvirtDriver(driver.ComputeDriver):
         disk_dev = mountpoint.rpartition("/")[2]
         try:
             guest = self._host.get_guest(instance)
-            conf = guest.get_disk(disk_dev)
-            if not conf:
-                raise exception.DiskNotFound(location=disk_dev)
 
             state = guest.get_power_state(self._host)
             live = state in (power_state.RUNNING, power_state.PAUSED)
-            guest.detach_device(conf, persistent=True, live=live)
+
+            wait_for_detach = guest.detach_device_with_retry(guest.get_disk,
+                                                             disk_dev,
+                                                             persistent=True,
+                                                             live=live)
 
             if encryption:
                 # The volume must be detached from the VM before
@@ -1244,12 +1245,16 @@ class LibvirtDriver(driver.ComputeDriver):
                 encryptor = self._get_volume_encryptor(connection_info,
                                                        encryption)
                 encryptor.detach_volume(**encryption)
+
+            wait_for_detach()
         except exception.InstanceNotFound:
             # NOTE(zhaoqin): If the instance does not exist, _lookup_by_name()
             #                will throw InstanceNotFound exception. Need to
             #                disconnect volume under this circumstance.
             LOG.warn(_LW("During detach_volume, instance disappeared."),
                      instance=instance)
+        except exception.DeviceNotFound:
+            raise exception.DiskNotFound(location=disk_dev)
         except libvirt.libvirtError as ex:
             # NOTE(vish): This is called to cleanup volumes after live
             #             migration, so we should still disconnect even if
@@ -2221,13 +2226,7 @@ class LibvirtDriver(driver.ComputeDriver):
 
     def pause(self, instance):
         """Pause VM instance."""
-        guest = self._host.get_guest(instance)
-
-        # TODO(sahid): We are converting all calls from a
-        # virDomain object to use nova.virt.libvirt.Guest.
-        # We should be able to remove dom at the end.
-        dom = guest._domain
-        dom.suspend()
+        self._host.get_guest(instance).pause()
 
     def unpause(self, instance):
         """Unpause paused VM instance."""
@@ -5038,11 +5037,7 @@ class LibvirtDriver(driver.ComputeDriver):
         # an initialization issue with some versions of Libvirt (1.0.5.5).
         # See: https://bugzilla.redhat.com/show_bug.cgi?id=1000116
         # See: https://bugs.launchpad.net/nova/+bug/1215593
-
-        # Temporary convert supported_instances into a string, while keeping
-        # the RPC version as JSON. Can be changed when RPC broadcast is removed
-        data["supported_instances"] = jsonutils.dumps(
-            self._get_instance_capabilities())
+        data["supported_instances"] = self._get_instance_capabilities()
 
         data["vcpus"] = self._get_vcpu_total()
         data["memory_mb"] = self._host.get_memory_mb_total()

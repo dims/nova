@@ -28,10 +28,12 @@ import netaddr
 from oslo_config import cfg
 from oslo_db import api as oslo_db_api
 from oslo_db import exception as db_exc
+from oslo_db.sqlalchemy import enginefacade
 from oslo_db.sqlalchemy import test_base
 from oslo_db.sqlalchemy import update_match
 from oslo_db.sqlalchemy import utils as sqlalchemyutils
 from oslo_serialization import jsonutils
+from oslo_utils import fixture as utils_fixture
 from oslo_utils import timeutils
 from oslo_utils import uuidutils
 import six
@@ -179,6 +181,58 @@ class DecoratorTestCase(test.TestCase):
     def test_require_deadlock_retry_wraps_functions_properly(self):
         self._test_decorator_wraps_helper(
             oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True))
+
+    @mock.patch.object(enginefacade._TransactionContextManager, 'using')
+    @mock.patch.object(enginefacade._TransactionContextManager, '_clone')
+    def test_select_db_reader_mode_select_sync(self, mock_clone, mock_using):
+
+        @db.select_db_reader_mode
+        def func(self, context, value, use_slave=False):
+            pass
+
+        mock_clone.return_value = enginefacade._TransactionContextManager(
+            mode=enginefacade._READER)
+        ctxt = context.get_admin_context()
+        value = 'some_value'
+        func(self, ctxt, value)
+
+        mock_clone.assert_called_once_with(mode=enginefacade._READER)
+        mock_using.assert_called_once_with(ctxt)
+
+    @mock.patch.object(enginefacade._TransactionContextManager, 'using')
+    @mock.patch.object(enginefacade._TransactionContextManager, '_clone')
+    def test_select_db_reader_mode_select_async(self, mock_clone, mock_using):
+
+        @db.select_db_reader_mode
+        def func(self, context, value, use_slave=False):
+            pass
+
+        mock_clone.return_value = enginefacade._TransactionContextManager(
+            mode=enginefacade._ASYNC_READER)
+        ctxt = context.get_admin_context()
+        value = 'some_value'
+        func(self, ctxt, value, use_slave=True)
+
+        mock_clone.assert_called_once_with(mode=enginefacade._ASYNC_READER)
+        mock_using.assert_called_once_with(ctxt)
+
+    @mock.patch.object(enginefacade._TransactionContextManager, 'using')
+    @mock.patch.object(enginefacade._TransactionContextManager, '_clone')
+    def test_select_db_reader_mode_no_use_slave_select_sync(self, mock_clone,
+                                                            mock_using):
+
+        @db.select_db_reader_mode
+        def func(self, context, value):
+            pass
+
+        mock_clone.return_value = enginefacade._TransactionContextManager(
+            mode=enginefacade._READER)
+        ctxt = context.get_admin_context()
+        value = 'some_value'
+        func(self, ctxt, value)
+
+        mock_clone.assert_called_once_with(mode=enginefacade._READER)
+        mock_using.assert_called_once_with(ctxt)
 
 
 def _get_fake_aggr_values():
@@ -5547,7 +5601,7 @@ class VolumeUsageDBApiTestCase(test.TestCase):
     def test_vol_usage_update_no_totals_update(self):
         ctxt = context.get_admin_context()
         now = timeutils.utcnow()
-        timeutils.set_time_override(now)
+        self.useFixture(utils_fixture.TimeFixture(now))
         start_time = now - datetime.timedelta(seconds=10)
 
         expected_vol_usages = {
@@ -5619,7 +5673,7 @@ class VolumeUsageDBApiTestCase(test.TestCase):
         now2 = now + datetime.timedelta(minutes=2)
         now3 = now + datetime.timedelta(minutes=3)
 
-        timeutils.set_time_override(now)
+        time_fixture = self.useFixture(utils_fixture.TimeFixture(now))
         db.vol_usage_update(ctxt, u'1', rd_req=100, rd_bytes=200,
                             wr_req=300, wr_bytes=400,
                             instance_id='fake-instance-uuid',
@@ -5630,7 +5684,7 @@ class VolumeUsageDBApiTestCase(test.TestCase):
         self.assertEqual(current_usage['tot_reads'], 0)
         self.assertEqual(current_usage['curr_reads'], 100)
 
-        timeutils.set_time_override(now1)
+        time_fixture.advance_time_delta(now1 - now)
         db.vol_usage_update(ctxt, u'1', rd_req=200, rd_bytes=300,
                             wr_req=400, wr_bytes=500,
                             instance_id='fake-instance-uuid',
@@ -5642,7 +5696,7 @@ class VolumeUsageDBApiTestCase(test.TestCase):
         self.assertEqual(current_usage['tot_reads'], 200)
         self.assertEqual(current_usage['curr_reads'], 0)
 
-        timeutils.set_time_override(now2)
+        time_fixture.advance_time_delta(now2 - now1)
         db.vol_usage_update(ctxt, u'1', rd_req=300, rd_bytes=400,
                             wr_req=500, wr_bytes=600,
                             instance_id='fake-instance-uuid',
@@ -5653,7 +5707,7 @@ class VolumeUsageDBApiTestCase(test.TestCase):
         self.assertEqual(current_usage['tot_reads'], 200)
         self.assertEqual(current_usage['curr_reads'], 300)
 
-        timeutils.set_time_override(now3)
+        time_fixture.advance_time_delta(now3 - now2)
         db.vol_usage_update(ctxt, u'1', rd_req=400, rd_bytes=500,
                             wr_req=600, wr_bytes=700,
                             instance_id='fake-instance-uuid',

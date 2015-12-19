@@ -119,40 +119,29 @@ def generate_identity_headers(context, status='Confirmed'):
         'X-Auth-Token': getattr(context, 'auth_token', None),
         'X-User-Id': getattr(context, 'user', None),
         'X-Tenant-Id': getattr(context, 'tenant', None),
-        'X-Roles': ','.join(context.roles),
+        'X-Roles': ','.join(getattr(context, 'roles', [])),
         'X-Identity-Status': status,
     }
 
 
-def _create_glance_client(context, host, port, use_ssl, version=1):
-    """Instantiate a new glanceclient.Client object."""
-    params = {}
-    if use_ssl:
-        scheme = 'https'
-        # https specific params
-        params['insecure'] = CONF.glance.api_insecure
-        params['ssl_compression'] = False
-        sslutils.is_enabled(CONF)
-        if CONF.ssl.cert_file:
-            params['cert_file'] = CONF.ssl.cert_file
-        if CONF.ssl.key_file:
-            params['key_file'] = CONF.ssl.key_file
-        if CONF.ssl.ca_file:
-            params['cacert'] = CONF.ssl.ca_file
-    else:
-        scheme = 'http'
-
-    if CONF.auth_strategy == 'keystone':
-        # NOTE(isethi): Glanceclient <= 0.9.0.49 accepts only
-        # keyword 'token', but later versions accept both the
-        # header 'X-Auth-Token' and 'token'
-        params['token'] = context.auth_token
+def _glanceclient_from_endpoint(context, endpoint, version=1):
+        """Instantiate a new glanceclient.Client object."""
+        params = {}
+        # NOTE(sdague): even if we aren't using keystone, it doesn't
+        # hurt to send these headers.
         params['identity_headers'] = generate_identity_headers(context)
-    if netutils.is_valid_ipv6(host):
-        # if so, it is ipv6 address, need to wrap it with '[]'
-        host = '[%s]' % host
-    endpoint = '%s://%s:%s' % (scheme, host, port)
-    return glanceclient.Client(str(version), endpoint, **params)
+        if endpoint.use_ssl:
+            # https specific params
+            params['insecure'] = CONF.glance.api_insecure
+            params['ssl_compression'] = False
+            sslutils.is_enabled(CONF)
+            if CONF.ssl.cert_file:
+                params['cert_file'] = CONF.ssl.cert_file
+            if CONF.ssl.key_file:
+                params['key_file'] = CONF.ssl.key_file
+            if CONF.ssl.ca_file:
+                params['cacert'] = CONF.ssl.ca_file
+        return glanceclient.Client(str(version), endpoint.url, **params)
 
 
 def _determine_curr_major_version(endpoint):
@@ -193,13 +182,7 @@ def get_api_servers():
                     "please update [glance] api_servers with fully "
                     "qualified url including scheme (http / https)"),
                 api_server)
-        o = urlparse.urlparse(api_server)
-        port = o.port or 80
-        host = o.netloc.rsplit(':', 1)[0]
-        if host[0] == '[' and host[-1] == ']':
-            host = host[1:-1]
-        use_ssl = (o.scheme == 'https')
-        api_servers.append((host, port, use_ssl))
+        api_servers.append(GlanceEndpoint(url=api_server))
     random.shuffle(api_servers)
     return itertools.cycle(api_servers)
 
@@ -210,31 +193,25 @@ class GlanceClientWrapper(object):
     def __init__(self, context=None, host=None, port=None, use_ssl=False,
                  version=1):
         if host is not None:
+            endpoint = GlanceEndpoint(host=host, port=port, use_ssl=use_ssl)
             self.client = self._create_static_client(context,
-                                                     host, port,
-                                                     use_ssl, version)
+                                                     endpoint,
+                                                     version)
         else:
             self.client = None
         self.api_servers = None
 
-    def _create_static_client(self, context, host, port, use_ssl, version):
+    def _create_static_client(self, context, endpoint, version):
         """Create a client that we'll use for every call."""
-        self.host = host
-        self.port = port
-        self.use_ssl = use_ssl
-        self.version = version
-        return _create_glance_client(context,
-                                     self.host, self.port,
-                                     self.use_ssl, self.version)
+        self.api_server = str(endpoint)
+        return _glanceclient_from_endpoint(context, endpoint, version)
 
     def _create_onetime_client(self, context, version):
         """Create a client that will be used for one call."""
         if self.api_servers is None:
             self.api_servers = get_api_servers()
-        self.host, self.port, self.use_ssl = next(self.api_servers)
-        return _create_glance_client(context,
-                                     self.host, self.port,
-                                     self.use_ssl, version)
+        self.api_server = next(self.api_servers)
+        return _glanceclient_from_endpoint(context, self.api_server, version)
 
     def call(self, context, version, method, *args, **kwargs):
         """Call a glance client method.  If we get a connection error,
@@ -257,23 +234,68 @@ class GlanceClientWrapper(object):
             try:
                 return getattr(client.images, method)(*args, **kwargs)
             except retry_excs as e:
-                host = self.host
-                port = self.port
-
                 if attempt < num_attempts:
                     extra = "retrying"
                 else:
                     extra = 'done trying'
 
                 LOG.exception(_LE("Error contacting glance server "
-                                  "'%(host)s:%(port)s' for '%(method)s', "
+                                  "'%(server)s' for '%(method)s', "
                                   "%(extra)s."),
-                              {'host': host, 'port': port,
+                              {'server': self.api_server,
                                'method': method, 'extra': extra})
                 if attempt == num_attempts:
                     raise exception.GlanceConnectionFailed(
-                            host=host, port=port, reason=six.text_type(e))
+                        server=str(self.api_server), reason=six.text_type(e))
                 time.sleep(1)
+
+
+class GlanceEndpoint(object):
+    """Provides a container to encapsulate glance endpoints.
+
+    In transitioning from handing around metadata that lets us build
+    an endpoint url, to actually just handing around the url, we need
+    a container which can encapsulate either. This allows for a
+    smoother transition to new code.
+
+    """
+
+    def __init__(self, **kwargs):
+        self.url = kwargs.get('url', None)
+
+        if self.url is None:
+            host = kwargs['host']
+            self.url = '%s://%s:%s' % (
+                'https' if kwargs.get('use_ssl', False) else 'http',
+                '[' + host + ']' if netutils.is_valid_ipv6(host) else host,
+                kwargs['port'])
+
+    def as_tuple(self):
+        parts = urlparse.urlparse(self.url)
+        host = parts.netloc.rsplit(':', 1)[0]
+        if host[0] == '[' and host[-1] == ']':
+            host = host[1:-1]
+        use_ssl = (parts.scheme == 'https')
+        port = parts.port or (443 if use_ssl else 80)
+        return (host, port, use_ssl)
+
+    @property
+    def host(self):
+        """Compute the host"""
+        return self.as_tuple()[0]
+
+    @property
+    def port(self):
+        """Compute the port"""
+        return self.as_tuple()[1]
+
+    @property
+    def use_ssl(self):
+        """Compute the use_ssl value"""
+        return self.as_tuple()[2]
+
+    def __str__(self):
+        return self.url
 
 
 class GlanceImageService(object):
@@ -604,6 +626,9 @@ def _extract_attributes(image, include_locations=False):
         elif attr in include_locations_attrs:
             if include_locations:
                 output[attr] = getattr(image, attr, None)
+        # NOTE(mdorman): 'size' attribute must not be 'None', so use 0 instead
+        elif attr == 'size':
+            output[attr] = getattr(image, attr) or 0
         else:
             # NOTE(xarses): Anything that is caught with the default value
             # will result in a additional lookup to glance for said attr.

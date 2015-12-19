@@ -18,7 +18,6 @@
 from ironicclient import exc as ironic_exception
 import mock
 from oslo_config import cfg
-from oslo_serialization import jsonutils
 from oslo_service import loopingcall
 from oslo_utils import uuidutils
 import six
@@ -287,7 +286,7 @@ class IronicDriverTestCase(test.NoDBTestCase):
         self.assertEqual(props_dict['local_gb'], result['local_gb_used'])
 
         self.assertEqual(node_uuid, result['hypervisor_hostname'])
-        self.assertEqual(stats, jsonutils.loads(result['stats']))
+        self.assertEqual(stats, result['stats'])
         self.assertIsNone(result['numa_topology'])
 
     def test__node_resource(self):
@@ -303,10 +302,8 @@ class IronicDriverTestCase(test.NoDBTestCase):
         node = ironic_utils.get_test_node(uuid=node_uuid, properties=props)
 
         result = self.driver._node_resource(node)
-        self.assertEqual('i686',
-                         jsonutils.loads(result['supported_instances'])[0][0])
-        self.assertEqual('i386',
-                         jsonutils.loads(result['stats'])['cpu_arch'])
+        self.assertEqual('i686', result['supported_instances'][0][0])
+        self.assertEqual('i386', result['stats']['cpu_arch'])
 
     def test__node_resource_unknown_arch(self):
         node_uuid = uuidutils.generate_uuid()
@@ -315,14 +312,14 @@ class IronicDriverTestCase(test.NoDBTestCase):
         node = ironic_utils.get_test_node(uuid=node_uuid, properties=props)
 
         result = self.driver._node_resource(node)
-        self.assertEqual([], jsonutils.loads(result['supported_instances']))
+        self.assertEqual([], result['supported_instances'])
 
     def test__node_resource_exposes_capabilities(self):
         props = _get_properties()
         props['capabilities'] = 'test:capability, test2:value2'
         node = ironic_utils.get_test_node(properties=props)
         result = self.driver._node_resource(node)
-        stats = jsonutils.loads(result['stats'])
+        stats = result['stats']
         self.assertIsNone(stats.get('capabilities'))
         self.assertEqual('capability', stats.get('test'))
         self.assertEqual('value2', stats.get('test2'))
@@ -332,14 +329,14 @@ class IronicDriverTestCase(test.NoDBTestCase):
         props['capabilities'] = None
         node = ironic_utils.get_test_node(properties=props)
         result = self.driver._node_resource(node)
-        self.assertIsNone(jsonutils.loads(result['stats']).get('capabilities'))
+        self.assertIsNone(result['stats'].get('capabilities'))
 
     def test__node_resource_malformed_capabilities(self):
         props = _get_properties()
         props['capabilities'] = 'test:capability,:no_key,no_val:'
         node = ironic_utils.get_test_node(properties=props)
         result = self.driver._node_resource(node)
-        stats = jsonutils.loads(result['stats'])
+        stats = result['stats']
         self.assertEqual('capability', stats.get('test'))
 
     def test__node_resource_available(self):
@@ -361,7 +358,7 @@ class IronicDriverTestCase(test.NoDBTestCase):
         self.assertEqual(props['local_gb'], result['local_gb'])
         self.assertEqual(0, result['local_gb_used'])
         self.assertEqual(node_uuid, result['hypervisor_hostname'])
-        self.assertEqual(stats, jsonutils.loads(result['stats']))
+        self.assertEqual(stats, result['stats'])
 
     @mock.patch.object(ironic_driver.IronicDriver,
                        '_node_resources_unavailable')
@@ -382,7 +379,7 @@ class IronicDriverTestCase(test.NoDBTestCase):
         self.assertEqual(0, result['local_gb'])
         self.assertEqual(0, result['local_gb_used'])
         self.assertEqual(node_uuid, result['hypervisor_hostname'])
-        self.assertEqual(stats, jsonutils.loads(result['stats']))
+        self.assertEqual(stats, result['stats'])
 
     @mock.patch.object(ironic_driver.IronicDriver,
                        '_node_resources_used')
@@ -407,7 +404,7 @@ class IronicDriverTestCase(test.NoDBTestCase):
         self.assertEqual(instance_info['local_gb'], result['local_gb'])
         self.assertEqual(instance_info['local_gb'], result['local_gb_used'])
         self.assertEqual(node_uuid, result['hypervisor_hostname'])
-        self.assertEqual(stats, jsonutils.loads(result['stats']))
+        self.assertEqual(stats, result['stats'])
 
     @mock.patch.object(ironic_driver.LOG, 'warning')
     def test__parse_node_properties(self, mock_warning):

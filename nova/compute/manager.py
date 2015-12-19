@@ -5927,12 +5927,9 @@ class ComputeManager(manager.Manager):
                                compute_utils.usage_volume_info(vol_usage))
 
     @periodic_task.periodic_task(spacing=CONF.volume_usage_poll_interval)
-    def _poll_volume_usage(self, context, start_time=None):
+    def _poll_volume_usage(self, context):
         if CONF.volume_usage_poll_interval == 0:
             return
-
-        if not start_time:
-            start_time = utils.last_completed_audit_period()[1]
 
         compute_host_bdms = self._get_host_volume_bdms(context,
                                                        use_slave=True)
@@ -6578,29 +6575,28 @@ class ComputeManager(manager.Manager):
                                          in migrations])
 
         inst_filters = {'deleted': True, 'soft_deleted': False,
-                        'uuid': inst_uuid_from_migrations}
+                        'uuid': inst_uuid_from_migrations, 'host': CONF.host}
         attrs = ['info_cache', 'security_groups', 'system_metadata']
         with utils.temporary_mutation(context, read_deleted='yes'):
             instances = objects.InstanceList.get_by_filters(
                 context, inst_filters, expected_attrs=attrs, use_slave=True)
 
         for instance in instances:
-            if instance.host != CONF.host:
-                for migration in migrations:
-                    if instance.uuid == migration.instance_uuid:
-                        # Delete instance files if not cleanup properly either
-                        # from the source or destination compute nodes when
-                        # the instance is deleted during resizing.
-                        self.driver.delete_instance_files(instance)
-                        try:
-                            migration.status = 'failed'
-                            with migration.obj_as_admin():
-                                migration.save()
-                        except exception.MigrationNotFound:
-                            LOG.warning(_LW("Migration %s is not found."),
-                                        migration.id, context=context,
-                                        instance=instance)
-                        break
+            for migration in migrations:
+                if instance.uuid == migration.instance_uuid:
+                    # Delete instance files if not cleanup properly either
+                    # from the source or destination compute nodes when
+                    # the instance is deleted during resizing.
+                    self.driver.delete_instance_files(instance)
+                    try:
+                        migration.status = 'failed'
+                        with migration.obj_as_admin():
+                            migration.save()
+                    except exception.MigrationNotFound:
+                        LOG.warning(_LW("Migration %s is not found."),
+                                    migration.id, context=context,
+                                    instance=instance)
+                    break
 
     @messaging.expected_exceptions(exception.InstanceQuiesceNotSupported,
                                    exception.QemuGuestAgentNotEnabled,
