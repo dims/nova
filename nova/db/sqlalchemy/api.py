@@ -754,7 +754,7 @@ def floating_ip_get(context, id):
             raise exception.FloatingIpNotFound(id=id)
     except db_exc.DBError:
         msg = _LW("Invalid floating IP ID %s in request") % id
-        LOG.warn(msg)
+        LOG.warning(msg)
         raise exception.InvalidID(id=id)
     return result
 
@@ -1018,7 +1018,7 @@ def _floating_ip_get_by_address(context, address, session=None):
             raise exception.FloatingIpNotFoundForAddress(address=address)
     except db_exc.DBError:
         msg = _("Invalid floating IP %s in request") % address
-        LOG.warn(msg)
+        LOG.warning(msg)
         raise exception.InvalidIpAddressError(msg)
 
     # If the floating IP has a project ID set, check to make sure
@@ -1334,7 +1334,7 @@ def _fixed_ip_get_by_address(context, address, session=None,
                 raise exception.FixedIpNotFoundForAddress(address=address)
         except db_exc.DBError:
             msg = _("Invalid fixed IP Address %s in request") % address
-            LOG.warn(msg)
+            LOG.warning(msg)
             raise exception.FixedIpInvalid(msg)
 
         # NOTE(sirp): shouldn't we just use project_only here to restrict the
@@ -1490,7 +1490,7 @@ def virtual_interface_get_by_address(context, address):
                           first()
     except db_exc.DBError:
         msg = _("Invalid virtual interface address %s in request") % address
-        LOG.warn(msg)
+        LOG.warning(msg)
         raise exception.InvalidIpAddressError(msg)
     return vif_ref
 
@@ -1586,7 +1586,7 @@ def _validate_unique_server_name(context, session, name):
         msg = _('Unknown osapi_compute_unique_server_name_scope value: %s'
                 ' Flag must be empty, "global" or'
                 ' "project"') % CONF.osapi_compute_unique_server_name_scope
-        LOG.warn(msg)
+        LOG.warning(msg)
         return
 
     if instance_with_same_name > 0:
@@ -1775,7 +1775,7 @@ def instance_get(context, instance_id, columns_to_join=None):
         # NOTE(sdague): catch all in case the db engine chokes on the
         # id because it's too long of an int to store.
         msg = _("Invalid instance id %s in request") % instance_id
-        LOG.warn(msg)
+        LOG.warning(msg)
         raise exception.InvalidID(id=instance_id)
 
 
@@ -4357,6 +4357,15 @@ def security_group_rule_get_by_security_group(context, security_group_id,
 
 
 @require_context
+def security_group_rule_get_by_instance(context, instance_uuid):
+    return (_security_group_rule_get_query(context).
+            join('parent_group', 'instances').
+            filter_by(uuid=instance_uuid).
+            options(joinedload('grantee_group')).
+            all())
+
+
+@require_context
 def security_group_rule_create(context, values):
     return _security_group_rule_create(context, values)
 
@@ -5151,17 +5160,19 @@ def instance_system_metadata_update(context, instance_uuid, metadata, delete):
 ####################
 
 
+@main_context_manager.writer
 def agent_build_create(context, values):
     agent_build_ref = models.AgentBuild()
     agent_build_ref.update(values)
     try:
-        agent_build_ref.save()
+        agent_build_ref.save(context.session)
     except db_exc.DBDuplicateEntry:
         raise exception.AgentBuildExists(hypervisor=values['hypervisor'],
                         os=values['os'], architecture=values['architecture'])
     return agent_build_ref
 
 
+@main_context_manager.reader
 def agent_build_get_by_triple(context, hypervisor, os, architecture):
     return model_query(context, models.AgentBuild, read_deleted="no").\
                    filter_by(hypervisor=hypervisor).\
@@ -5170,6 +5181,7 @@ def agent_build_get_by_triple(context, hypervisor, os, architecture):
                    first()
 
 
+@main_context_manager.reader
 def agent_build_get_all(context, hypervisor=None):
     if hypervisor:
         return model_query(context, models.AgentBuild, read_deleted="no").\
@@ -5180,6 +5192,7 @@ def agent_build_get_all(context, hypervisor=None):
                    all()
 
 
+@main_context_manager.writer
 def agent_build_destroy(context, agent_build_id):
     rows_affected = model_query(context, models.AgentBuild).filter_by(
                                         id=agent_build_id).soft_delete()
@@ -5187,6 +5200,7 @@ def agent_build_destroy(context, agent_build_id):
         raise exception.AgentBuildNotFound(id=agent_build_id)
 
 
+@main_context_manager.writer
 def agent_build_update(context, agent_build_id, values):
     rows_affected = model_query(context, models.AgentBuild).\
                    filter_by(id=agent_build_id).\
@@ -5682,7 +5696,7 @@ def aggregate_metadata_add(context, aggregate_id, metadata, set_delete=False,
                     msg = _("Add metadata failed for aggregate %(id)s after "
                             "%(retries)s retries") % {"id": aggregate_id,
                                                       "retries": max_retries}
-                    LOG.warn(msg)
+                    LOG.warning(msg)
 
 
 @require_aggregate_exists
@@ -5755,28 +5769,29 @@ def instance_fault_get_by_instance_uuids(context, instance_uuids):
 ##################
 
 
+@main_context_manager.writer
 def action_start(context, values):
     convert_objects_related_datetimes(values, 'start_time')
     action_ref = models.InstanceAction()
     action_ref.update(values)
-    action_ref.save()
+    action_ref.save(context.session)
     return action_ref
 
 
+@main_context_manager.writer
 def action_finish(context, values):
     convert_objects_related_datetimes(values, 'start_time', 'finish_time')
-    session = get_session()
-    with session.begin():
-        query = model_query(context, models.InstanceAction, session=session).\
-                           filter_by(instance_uuid=values['instance_uuid']).\
-                           filter_by(request_id=values['request_id'])
-        if query.update(values) != 1:
-            raise exception.InstanceActionNotFound(
-                                        request_id=values['request_id'],
-                                        instance_uuid=values['instance_uuid'])
-        return query.one()
+    query = model_query(context, models.InstanceAction).\
+                        filter_by(instance_uuid=values['instance_uuid']).\
+                        filter_by(request_id=values['request_id'])
+    if query.update(values) != 1:
+        raise exception.InstanceActionNotFound(
+                                    request_id=values['request_id'],
+                                    instance_uuid=values['instance_uuid'])
+    return query.one()
 
 
+@main_context_manager.reader
 def actions_get(context, instance_uuid):
     """Get all instance actions for the provided uuid."""
     actions = model_query(context, models.InstanceAction).\
@@ -5786,99 +5801,96 @@ def actions_get(context, instance_uuid):
     return actions
 
 
+@main_context_manager.reader
 def action_get_by_request_id(context, instance_uuid, request_id):
     """Get the action by request_id and given instance."""
     action = _action_get_by_request_id(context, instance_uuid, request_id)
     return action
 
 
-def _action_get_by_request_id(context, instance_uuid, request_id,
-                                                                session=None):
-    result = model_query(context, models.InstanceAction, session=session).\
+def _action_get_by_request_id(context, instance_uuid, request_id):
+    result = model_query(context, models.InstanceAction).\
                          filter_by(instance_uuid=instance_uuid).\
                          filter_by(request_id=request_id).\
                          first()
     return result
 
 
-def _action_get_last_created_by_instance_uuid(context, instance_uuid,
-                                              session=None):
-    result = (model_query(context, models.InstanceAction, session=session).
+def _action_get_last_created_by_instance_uuid(context, instance_uuid):
+    result = (model_query(context, models.InstanceAction).
                      filter_by(instance_uuid=instance_uuid).
                      order_by(desc("created_at"), desc("id")).
                      first())
     return result
 
 
+@main_context_manager.writer
 def action_event_start(context, values):
     """Start an event on an instance action."""
     convert_objects_related_datetimes(values, 'start_time')
-    session = get_session()
-    with session.begin():
-        action = _action_get_by_request_id(context, values['instance_uuid'],
-                                           values['request_id'], session)
-        # When nova-compute restarts, the context is generated again in
-        # init_host workflow, the request_id was different with the request_id
-        # recorded in InstanceAction, so we can't get the original record
-        # according to request_id. Try to get the last created action so that
-        # init_instance can continue to finish the recovery action, like:
-        # powering_off, unpausing, and so on.
-        if not action and not context.project_id:
-            action = _action_get_last_created_by_instance_uuid(
-                context, values['instance_uuid'], session)
+    action = _action_get_by_request_id(context, values['instance_uuid'],
+                                       values['request_id'])
+    # When nova-compute restarts, the context is generated again in
+    # init_host workflow, the request_id was different with the request_id
+    # recorded in InstanceAction, so we can't get the original record
+    # according to request_id. Try to get the last created action so that
+    # init_instance can continue to finish the recovery action, like:
+    # powering_off, unpausing, and so on.
+    if not action and not context.project_id:
+        action = _action_get_last_created_by_instance_uuid(
+            context, values['instance_uuid'])
 
-        if not action:
-            raise exception.InstanceActionNotFound(
-                                        request_id=values['request_id'],
-                                        instance_uuid=values['instance_uuid'])
+    if not action:
+        raise exception.InstanceActionNotFound(
+                                    request_id=values['request_id'],
+                                    instance_uuid=values['instance_uuid'])
 
-        values['action_id'] = action['id']
+    values['action_id'] = action['id']
 
-        event_ref = models.InstanceActionEvent()
-        event_ref.update(values)
-        session.add(event_ref)
+    event_ref = models.InstanceActionEvent()
+    event_ref.update(values)
+    context.session.add(event_ref)
     return event_ref
 
 
+@main_context_manager.writer
 def action_event_finish(context, values):
     """Finish an event on an instance action."""
     convert_objects_related_datetimes(values, 'start_time', 'finish_time')
-    session = get_session()
-    with session.begin():
-        action = _action_get_by_request_id(context, values['instance_uuid'],
-                                           values['request_id'], session)
-        # When nova-compute restarts, the context is generated again in
-        # init_host workflow, the request_id was different with the request_id
-        # recorded in InstanceAction, so we can't get the original record
-        # according to request_id. Try to get the last created action so that
-        # init_instance can continue to finish the recovery action, like:
-        # powering_off, unpausing, and so on.
-        if not action and not context.project_id:
-            action = _action_get_last_created_by_instance_uuid(
-                context, values['instance_uuid'], session)
+    action = _action_get_by_request_id(context, values['instance_uuid'],
+                                       values['request_id'])
+    # When nova-compute restarts, the context is generated again in
+    # init_host workflow, the request_id was different with the request_id
+    # recorded in InstanceAction, so we can't get the original record
+    # according to request_id. Try to get the last created action so that
+    # init_instance can continue to finish the recovery action, like:
+    # powering_off, unpausing, and so on.
+    if not action and not context.project_id:
+        action = _action_get_last_created_by_instance_uuid(
+            context, values['instance_uuid'])
 
-        if not action:
-            raise exception.InstanceActionNotFound(
-                                        request_id=values['request_id'],
-                                        instance_uuid=values['instance_uuid'])
+    if not action:
+        raise exception.InstanceActionNotFound(
+                                    request_id=values['request_id'],
+                                    instance_uuid=values['instance_uuid'])
 
-        event_ref = model_query(context, models.InstanceActionEvent,
-                                session=session).\
+    event_ref = model_query(context, models.InstanceActionEvent).\
                             filter_by(action_id=action['id']).\
                             filter_by(event=values['event']).\
                             first()
 
-        if not event_ref:
-            raise exception.InstanceActionEventNotFound(action_id=action['id'],
-                                                        event=values['event'])
-        event_ref.update(values)
+    if not event_ref:
+        raise exception.InstanceActionEventNotFound(action_id=action['id'],
+                                                    event=values['event'])
+    event_ref.update(values)
 
-        if values['result'].lower() == 'error':
-            action.update({'message': 'Error'})
+    if values['result'].lower() == 'error':
+        action.update({'message': 'Error'})
 
     return event_ref
 
 
+@main_context_manager.reader
 def action_events_get(context, action_id):
     events = model_query(context, models.InstanceActionEvent).\
                          filter_by(action_id=action_id).\
@@ -5888,6 +5900,7 @@ def action_events_get(context, action_id):
     return events
 
 
+@main_context_manager.reader
 def action_event_get_by_id(context, action_id, event_id):
     event = model_query(context, models.InstanceActionEvent).\
                         filter_by(action_id=action_id).\
@@ -6074,7 +6087,7 @@ def _archive_deleted_rows_for_table(tablename, max_rows):
         # A foreign key constraint keeps us from deleting some of
         # these rows until we clean up a dependent table.  Just
         # skip this table for now; we'll come back to it later.
-        LOG.warn(_LW("IntegrityError detected when archiving table "
+        LOG.warning(_LW("IntegrityError detected when archiving table "
                      "%(tablename)s: %(error)s"),
                  {'tablename': tablename, 'error': six.text_type(ex)})
         return rows_archived
@@ -6427,6 +6440,13 @@ def pci_device_get_by_id(context, id):
 def pci_device_get_all_by_node(context, node_id):
     return model_query(context, models.PciDevice).\
                        filter_by(compute_node_id=node_id).\
+                       all()
+
+
+def pci_device_get_all_by_parent_addr(context, node_id, parent_addr):
+    return model_query(context, models.PciDevice).\
+                       filter_by(compute_node_id=node_id).\
+                       filter_by(parent_addr=parent_addr).\
                        all()
 
 

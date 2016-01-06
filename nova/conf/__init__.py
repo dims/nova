@@ -28,7 +28,7 @@ from oslo_config import cfg
 # from nova.conf import cells
 # from nova.conf import cinder
 # from nova.conf import cloudpipe
-# from nova.conf import compute
+from nova.conf import compute
 # from nova.conf import conductor
 # from nova.conf import configdrive
 # from nova.conf import console
@@ -37,7 +37,7 @@ from oslo_config import cfg
 # from nova.conf import crypto
 # from nova.conf import database
 # from nova.conf import disk
-# from nova.conf import ephemeral_storage_encryption
+from nova.conf import ephemeral_storage
 # from nova.conf import floating_ip
 # from nova.conf import glance
 # from nova.conf import guestfs
@@ -46,7 +46,7 @@ from oslo_config import cfg
 # from nova.conf import image
 # from nova.conf import imagecache
 # from nova.conf import image_file_url
-# from nova.conf import ironic
+from nova.conf import ironic
 # from nova.conf import keymgr
 # from nova.conf import keystone_authtoken
 # from nova.conf import libvirt
@@ -65,7 +65,7 @@ from nova.conf import serial_console
 # from nova.conf import ssl
 # from nova.conf import trusted_computing
 # from nova.conf import upgrade_levels
-# from nova.conf import virt
+from nova.conf import virt
 # from nova.conf import vmware
 # from nova.conf import vnc
 # from nova.conf import volume
@@ -86,7 +86,7 @@ CONF = cfg.CONF
 # cells.register_opts(CONF)
 # cinder.register_opts(CONF)
 # cloudpipe.register_opts(CONF)
-# compute.register_opts(CONF)
+compute.register_opts(CONF)
 # conductor.register_opts(CONF)
 # configdrive.register_opts(CONF)
 # console.register_opts(CONF)
@@ -95,7 +95,7 @@ CONF = cfg.CONF
 # crypto.register_opts(CONF)
 # database.register_opts(CONF)
 # disk.register_opts(CONF)
-# ephemeral_storage_encryption.register_opts(CONF)
+ephemeral_storage.register_opts(CONF)
 # floating_ip.register_opts(CONF)
 # glance.register_opts(CONF)
 # guestfs.register_opts(CONF)
@@ -104,7 +104,7 @@ CONF = cfg.CONF
 # image.register_opts(CONF)
 # imagecache.register_opts(CONF)
 # image_file_url.register_opts(CONF)
-# ironic.register_opts(CONF)
+ironic.register_opts(CONF)
 # keymgr.register_opts(CONF)
 # keystone_authtoken.register_opts(CONF)
 # libvirt.register_opts(CONF)
@@ -123,7 +123,7 @@ serial_console.register_opts(CONF)
 # ssl.register_opts(CONF)
 # trusted_computing.register_opts(CONF)
 # upgrade_levels.register_opts(CONF)
-# virt.register_opts(CONF)
+virt.register_opts(CONF)
 # vmware.register_opts(CONF)
 # vnc.register_opts(CONF)
 # volume.register_opts(CONF)

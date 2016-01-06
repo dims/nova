@@ -2,7 +2,7 @@
 Key Compute API Concepts
 =========================
 
-The OpenStack Compute API is defined as a ReSTful HTTP service. The API
+The OpenStack Compute API is defined as a RESTful HTTP service. The API
 takes advantage of all aspects of the HTTP protocol (methods, URIs,
 media types, response codes, etc.) and providers are free to use
 existing features of the protocol such as caching, persistent
@@ -235,19 +235,35 @@ on compute hosts rather than servers.
 
 -  **Hypervisors**
 
-   TODO
+   A hypervisor, or virtual machine monitor (VMM), is a piece of computer
+   software, firmware or hardware that creates and runs virtual machines.
+
+   In nova, each Host (see `Hosts`) runs a hypervisor. Administrators are able
+   to query the hypervisor for information, such as all the virtual servers
+   currently running, as well as detailed info about the hypervisor, such as
+   CPU, memory, or disk related configuration.
+
+   Currently nova-compute also support Ironic and LXC, but they don't have
+   a hypervisor running.
 
 -  **Aggregates**
 
-   TODO
+   Please see :doc:`aggregates.rst`
 
 -  **Migrations**
 
-   TODO
+   Migrations are the process where a virtual server is moved from one host to
+   another. Please see :doc:`server_concepts` for details about
+   moving servers.
+
+   Administrators are able to query the records in database for information
+   about migrations. For example, they can determine the source and
+   destination hosts, type of migration, or changes in the server's flavor.
 
 -  **Certificates**
 
-   TODO
+   Nova service "nova-cert" handles the management of X509 certificates which
+   are used to generate certificates for euca-bundle-image.
 
 Relationship with Volume API
 =============================

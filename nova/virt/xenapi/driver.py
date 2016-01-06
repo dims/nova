@@ -454,13 +454,12 @@ class XenAPIDriver(driver.ComputeDriver):
                'vcpus_used': host_stats['vcpus_used'],
                'memory_mb_used': total_ram_mb - free_ram_mb,
                'local_gb_used': used_disk_gb,
-               'hypervisor_type': 'xen',
+               'hypervisor_type': 'XenServer',
                'hypervisor_version': hyper_ver,
                'hypervisor_hostname': host_stats['host_hostname'],
                'cpu_info': jsonutils.dumps(host_stats['cpu_model']),
                'disk_available_least': total_disk_gb - allocated_disk_gb,
-               'supported_instances': jsonutils.dumps(
-                   host_stats['supported_instances']),
+               'supported_instances': host_stats['supported_instances'],
                'pci_passthrough_devices': jsonutils.dumps(
                    host_stats['pci_passthrough_devices']),
                'numa_topology': None}

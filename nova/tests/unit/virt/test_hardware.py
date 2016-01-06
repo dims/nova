@@ -12,6 +12,7 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+import collections
 import uuid
 
 import mock
@@ -1896,6 +1897,25 @@ class _CPUPinningTestCaseBase(object):
         self.assertEqual(len(instance_cell.cpuset),
                          len(instance_cell.cpu_pinning))
 
+    def assertPinningPreferThreads(self, instance_cell, host_cell):
+        """Make sure we are preferring threads.
+
+        We do this by assessing that at least 2 CPUs went to the same core
+        if that was even possible to begin with.
+        """
+        max_free_siblings = max(map(len, host_cell.free_siblings))
+        if len(instance_cell) > 1 and max_free_siblings > 1:
+            cpu_to_sib = {}
+            for sib in host_cell.free_siblings:
+                for cpu in sib:
+                    cpu_to_sib[cpu] = tuple(sorted(sib))
+            pins_per_sib = collections.defaultdict(int)
+            for inst_p, host_p in instance_cell.cpu_pinning.items():
+                pins_per_sib[cpu_to_sib[host_p]] += 1
+            self.assertTrue(max(pins_per_sib.values()) > 1,
+                            "Seems threads were not prefered by the pinning "
+                            "logic.")
+
 
 class CPUPinningCellTestCase(test.NoDBTestCase, _CPUPinningTestCaseBase):
     def test_get_pinning_inst_too_large_cpu(self):
@@ -1938,6 +1958,10 @@ class CPUPinningCellTestCase(test.NoDBTestCase, _CPUPinningTestCaseBase):
 
         inst_pin = hw._numa_fit_instance_cell_with_pinning(host_pin, inst_pin)
         self.assertInstanceCellPinned(inst_pin)
+        got_topo = objects.VirtCPUTopology(sockets=1, cores=1, threads=3)
+        self.assertEqualTopology(got_topo, inst_pin.cpu_topology)
+        got_pinning = {x: x for x in range(0, 3)}
+        self.assertEqual(got_pinning, inst_pin.cpu_pinning)
 
     def test_get_pinning_no_sibling_fits_w_usage(self):
         host_pin = objects.NUMACell(id=0, cpuset=set([0, 1, 2, 3]),
@@ -1948,31 +1972,53 @@ class CPUPinningCellTestCase(test.NoDBTestCase, _CPUPinningTestCaseBase):
 
         inst_pin = hw._numa_fit_instance_cell_with_pinning(host_pin, inst_pin)
         self.assertInstanceCellPinned(inst_pin)
+        got_pinning = {0: 0, 1: 2, 2: 3}
+        self.assertEqual(got_pinning, inst_pin.cpu_pinning)
 
     def test_get_pinning_instance_siblings_fits(self):
         host_pin = objects.NUMACell(id=0, cpuset=set([0, 1, 2, 3]),
                                     memory=2048, memory_usage=0, siblings=[],
                                     mempages=[], pinned_cpus=set([]))
-        topo = objects.VirtCPUTopology(sockets=1, cores=2, threads=2)
         inst_pin = objects.InstanceNUMACell(
-                cpuset=set([0, 1, 2, 3]), memory=2048, cpu_topology=topo)
+                cpuset=set([0, 1, 2, 3]), memory=2048)
 
         inst_pin = hw._numa_fit_instance_cell_with_pinning(host_pin, inst_pin)
         self.assertInstanceCellPinned(inst_pin)
-        self.assertEqualTopology(topo, inst_pin.cpu_topology)
+        got_topo = objects.VirtCPUTopology(sockets=1, cores=1, threads=4)
+        self.assertEqualTopology(got_topo, inst_pin.cpu_topology)
+        got_pinning = {x: x for x in range(0, 4)}
+        self.assertEqual(got_pinning, inst_pin.cpu_pinning)
 
     def test_get_pinning_instance_siblings_host_siblings_fits_empty(self):
         host_pin = objects.NUMACell(id=0, cpuset=set([0, 1, 2, 3]),
                                     memory=2048, memory_usage=0,
                                     siblings=[set([0, 1]), set([2, 3])],
                                     mempages=[], pinned_cpus=set([]))
-        topo = objects.VirtCPUTopology(sockets=1, cores=2, threads=2)
         inst_pin = objects.InstanceNUMACell(
-                cpuset=set([0, 1, 2, 3]), memory=2048, cpu_topology=topo)
+                cpuset=set([0, 1, 2, 3]), memory=2048)
 
         inst_pin = hw._numa_fit_instance_cell_with_pinning(host_pin, inst_pin)
         self.assertInstanceCellPinned(inst_pin)
-        self.assertEqualTopology(topo, inst_pin.cpu_topology)
+        got_topo = objects.VirtCPUTopology(sockets=1, cores=2, threads=2)
+        self.assertEqualTopology(got_topo, inst_pin.cpu_topology)
+        got_pinning = {x: x for x in range(0, 4)}
+        self.assertEqual(got_pinning, inst_pin.cpu_pinning)
+
+    def test_get_pinning_instance_siblings_host_siblings_fits_empty_2(self):
+        host_pin = objects.NUMACell(
+                id=0, cpuset=set([0, 1, 2, 3, 4, 5, 6, 7]),
+                memory=4096, memory_usage=0,
+                siblings=[set([0, 1]), set([2, 3]), set([4, 5]), set([6, 7])],
+                mempages=[], pinned_cpus=set([]))
+        inst_pin = objects.InstanceNUMACell(
+                cpuset=set([0, 1, 2, 3, 4, 5, 6, 7]), memory=2048)
+
+        inst_pin = hw._numa_fit_instance_cell_with_pinning(host_pin, inst_pin)
+        self.assertInstanceCellPinned(inst_pin)
+        got_topo = objects.VirtCPUTopology(sockets=1, cores=4, threads=2)
+        self.assertEqualTopology(got_topo, inst_pin.cpu_topology)
+        got_pinning = {x: x for x in range(0, 8)}
+        self.assertEqual(got_pinning, inst_pin.cpu_pinning)
 
     def test_get_pinning_instance_siblings_host_siblings_fits_w_usage(self):
         host_pin = objects.NUMACell(
@@ -1982,27 +2028,15 @@ class CPUPinningCellTestCase(test.NoDBTestCase, _CPUPinningTestCaseBase):
                 pinned_cpus=set([1, 2, 5, 6]),
                 siblings=[set([0, 1, 2, 3]), set([4, 5, 6, 7])],
                 mempages=[])
-        topo = objects.VirtCPUTopology(sockets=1, cores=2, threads=2)
         inst_pin = objects.InstanceNUMACell(
-                cpuset=set([0, 1, 2, 3]), memory=2048, cpu_topology=topo)
+                cpuset=set([0, 1, 2, 3]), memory=2048)
 
         inst_pin = hw._numa_fit_instance_cell_with_pinning(host_pin, inst_pin)
         self.assertInstanceCellPinned(inst_pin)
-        self.assertEqualTopology(topo, inst_pin.cpu_topology)
-
-    def test_get_pinning_instance_siblings_host_siblings_fails(self):
-        host_pin = objects.NUMACell(
-                id=0, cpuset=set([0, 1, 2, 3, 4, 5, 6, 7]),
-                memory=4096, memory_usage=0,
-                siblings=[set([0, 1]), set([2, 3]), set([4, 5]), set([6, 7])],
-                mempages=[], pinned_cpus=set([]))
-        topo = objects.VirtCPUTopology(sockets=1, cores=2, threads=4)
-        inst_pin = objects.InstanceNUMACell(
-                cpuset=set([0, 1, 2, 3, 4, 5, 6, 7]), memory=2048,
-                cpu_topology=topo)
-
-        inst_pin = hw._numa_fit_instance_cell_with_pinning(host_pin, inst_pin)
-        self.assertIsNone(inst_pin)
+        got_topo = objects.VirtCPUTopology(sockets=1, cores=2, threads=2)
+        self.assertEqualTopology(got_topo, inst_pin.cpu_topology)
+        got_pinning = {0: 0, 1: 3, 2: 4, 3: 7}
+        self.assertEqual(got_pinning, inst_pin.cpu_pinning)
 
     def test_get_pinning_host_siblings_fit_single_core(self):
         host_pin = objects.NUMACell(
@@ -2017,6 +2051,8 @@ class CPUPinningCellTestCase(test.NoDBTestCase, _CPUPinningTestCaseBase):
         self.assertInstanceCellPinned(inst_pin)
         got_topo = objects.VirtCPUTopology(sockets=1, cores=1, threads=4)
         self.assertEqualTopology(got_topo, inst_pin.cpu_topology)
+        got_pinning = {x: x for x in range(0, 4)}
+        self.assertEqual(got_pinning, inst_pin.cpu_pinning)
 
     def test_get_pinning_host_siblings_fit(self):
         host_pin = objects.NUMACell(id=0, cpuset=set([0, 1, 2, 3]),
@@ -2028,6 +2064,78 @@ class CPUPinningCellTestCase(test.NoDBTestCase, _CPUPinningTestCaseBase):
         inst_pin = hw._numa_fit_instance_cell_with_pinning(host_pin, inst_pin)
         self.assertInstanceCellPinned(inst_pin)
         got_topo = objects.VirtCPUTopology(sockets=1, cores=2, threads=2)
+        self.assertEqualTopology(got_topo, inst_pin.cpu_topology)
+        got_pinning = {x: x for x in range(0, 4)}
+        self.assertEqual(got_pinning, inst_pin.cpu_pinning)
+
+    def test_get_pinning_host_siblings_instance_odd_fit(self):
+        host_pin = objects.NUMACell(id=0, cpuset=set([0, 1, 2, 3, 4, 5, 6, 7]),
+                                    memory=4096, memory_usage=0,
+                                    siblings=[set([0, 1]), set([2, 3]),
+                                              set([4, 5]), set([6, 7])],
+                                    mempages=[], pinned_cpus=set([]))
+        inst_pin = objects.InstanceNUMACell(cpuset=set([0, 1, 2, 3, 4]),
+                                            memory=2048)
+        inst_pin = hw._numa_fit_instance_cell_with_pinning(host_pin, inst_pin)
+        self.assertInstanceCellPinned(inst_pin)
+        got_topo = objects.VirtCPUTopology(sockets=1, cores=5, threads=1)
+        self.assertEqualTopology(got_topo, inst_pin.cpu_topology)
+
+    def test_get_pinning_host_siblings_instance_fit_optimize_threads(self):
+        host_pin = objects.NUMACell(id=0, cpuset=set([0, 1, 2, 3, 4, 5, 6, 7]),
+                                    memory=4096, memory_usage=0,
+                                    siblings=[set([0, 1, 2, 3]),
+                                              set([4, 5, 6, 7])],
+                                    mempages=[], pinned_cpus=set([]))
+        inst_pin = objects.InstanceNUMACell(cpuset=set([0, 1, 2, 3, 4, 5]),
+                                            memory=2048)
+        inst_pin = hw._numa_fit_instance_cell_with_pinning(host_pin, inst_pin)
+        self.assertInstanceCellPinned(inst_pin)
+        got_topo = objects.VirtCPUTopology(sockets=1, cores=3, threads=2)
+        self.assertEqualTopology(got_topo, inst_pin.cpu_topology)
+
+    def test_get_pinning_host_siblings_instance_odd_fit_w_usage(self):
+        host_pin = objects.NUMACell(id=0, cpuset=set([0, 1, 2, 3, 4, 5, 6, 7]),
+                                    memory=4096, memory_usage=0,
+                                    siblings=[set([0, 1]), set([2, 3]),
+                                              set([4, 5]), set([6, 7])],
+                                    mempages=[], pinned_cpus=set([0, 2, 5]))
+        inst_pin = objects.InstanceNUMACell(cpuset=set([0, 1, 2]),
+                                            memory=2048)
+        inst_pin = hw._numa_fit_instance_cell_with_pinning(host_pin, inst_pin)
+        self.assertInstanceCellPinned(inst_pin)
+        got_topo = objects.VirtCPUTopology(sockets=1, cores=3, threads=1)
+        self.assertEqualTopology(got_topo, inst_pin.cpu_topology)
+
+    def test_get_pinning_host_siblings_instance_odd_fit_orphan_only(self):
+        host_pin = objects.NUMACell(id=0, cpuset=set([0, 1, 2, 3, 4, 5, 6, 7]),
+                                    memory=4096, memory_usage=0,
+                                    siblings=[set([0, 1]), set([2, 3]),
+                                              set([4, 5]), set([6, 7])],
+                                    mempages=[], pinned_cpus=set([0, 2, 5, 6]))
+        inst_pin = objects.InstanceNUMACell(cpuset=set([0, 1, 2, 3]),
+                                            memory=2048)
+        inst_pin = hw._numa_fit_instance_cell_with_pinning(host_pin, inst_pin)
+        self.assertInstanceCellPinned(inst_pin)
+        got_topo = objects.VirtCPUTopology(sockets=1, cores=4, threads=1)
+        self.assertEqualTopology(got_topo, inst_pin.cpu_topology)
+
+    def test_get_pinning_host_siblings_large_instance_odd_fit(self):
+        host_pin = objects.NUMACell(id=0, cpuset=set([0, 1, 2, 3, 4, 5, 6, 7,
+                                                      8, 9, 10, 11, 12, 13, 14,
+                                                      15]),
+                                    memory=4096, memory_usage=0,
+                                    siblings=[set([0, 8]), set([1, 9]),
+                                              set([2, 10]), set([3, 11]),
+                                              set([4, 12]), set([5, 13]),
+                                              set([6, 14]), set([7, 15])],
+                                    mempages=[], pinned_cpus=set([]))
+        inst_pin = objects.InstanceNUMACell(cpuset=set([0, 1, 2, 3, 4]),
+                                            memory=2048)
+        inst_pin = hw._numa_fit_instance_cell_with_pinning(host_pin, inst_pin)
+        self.assertInstanceCellPinned(inst_pin)
+        self.assertPinningPreferThreads(inst_pin, host_pin)
+        got_topo = objects.VirtCPUTopology(sockets=1, cores=5, threads=1)
         self.assertEqualTopology(got_topo, inst_pin.cpu_topology)
 
 

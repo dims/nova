@@ -318,6 +318,7 @@ class ComputeAPI(object):
 
         * ...  - Remove refresh_security_group_members()
         * ...  - Remove refresh_security_group_rules()
+        * 4.6  - Add trigger_crash_dump()
     '''
 
     VERSION_ALIASES = {
@@ -984,3 +985,13 @@ class ComputeAPI(object):
                 version=version)
         cctxt.cast(ctxt, 'refresh_instance_security_rules',
                    instance=instance)
+
+    def trigger_crash_dump(self, ctxt, instance):
+        version = '4.6'
+
+        if not self.client.can_send_version(version):
+            raise exception.NMINotSupported()
+
+        cctxt = self.client.prepare(server=_compute_host(None, instance),
+                version=version)
+        return cctxt.cast(ctxt, "trigger_crash_dump", instance=instance)

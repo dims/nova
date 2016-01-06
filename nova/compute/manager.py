@@ -167,8 +167,10 @@ interval_opts = [
                help="Number of seconds between instance network information "
                     "cache updates"),
     cfg.IntOpt('reclaim_instance_interval',
+               min=0,
                default=0,
-               help='Interval in seconds for reclaiming deleted instances'),
+               help='Interval in seconds for reclaiming deleted instances. '
+                    'It takes effect only when value is greater than 0.'),
     cfg.IntOpt('volume_usage_poll_interval',
                default=0,
                help='Interval in seconds for gathering volume usages'),
@@ -672,7 +674,7 @@ class ComputeVirtAPI(virtapi.VirtAPI):
 class ComputeManager(manager.Manager):
     """Manages the running instances from creation to destruction."""
 
-    target = messaging.Target(version='4.5')
+    target = messaging.Target(version='4.6')
 
     # How long to wait in seconds before re-issuing a shutdown
     # signal to an instance during power off.  The overall
@@ -1290,7 +1292,7 @@ class ComputeManager(manager.Manager):
             # NOTE(mriedem): If the _sync_power_states periodic task is
             # disabled we should emit a warning in the logs.
             if CONF.sync_power_state_interval < 0:
-                LOG.warn(_LW('Instance lifecycle events from the compute '
+                LOG.warning(_LW('Instance lifecycle events from the compute '
                              'driver have been disabled. Note that lifecycle '
                              'changes to an instance outside of the compute '
                              'service will not be synchronized '
@@ -1747,7 +1749,7 @@ class ComputeManager(manager.Manager):
         except exception.OverQuota:
             msg = _LW('Failed to create block device for instance due to '
                       'being over volume resource quota')
-            LOG.warn(msg, instance=instance)
+            LOG.warning(msg, instance=instance)
             raise exception.VolumeLimitExceeded()
 
         except Exception:
@@ -2576,6 +2578,25 @@ class ComputeManager(manager.Manager):
         instance.save(expected_task_state=task_states.POWERING_ON)
         self._notify_about_instance_usage(context, instance, "power_on.end")
 
+    @messaging.expected_exceptions(NotImplementedError,
+                                   exception.NMINotSupported,
+                                   exception.InstanceNotRunning)
+    @wrap_exception()
+    @wrap_instance_event
+    @wrap_instance_fault
+    def trigger_crash_dump(self, context, instance):
+        """Trigger crash dump in an instance by injecting NMI."""
+
+        self._notify_about_instance_usage(context, instance,
+                                          "trigger_crash_dump.start")
+
+        # This method does not change task_state and power_state because the
+        # effect of an NMI depends on user's configuration.
+        self.driver.inject_nmi(instance)
+
+        self._notify_about_instance_usage(context, instance,
+                                          "trigger_crash_dump.end")
+
     @wrap_exception()
     @reverts_task_state
     @wrap_instance_event
@@ -3029,8 +3050,6 @@ class ComputeManager(manager.Manager):
 
     @delete_image_on_error
     def _do_snapshot_instance(self, context, image_id, instance, rotation):
-        if rotation < 0:
-            raise exception.RotationRequiredForBackup()
         self._snapshot_instance(context, image_id, instance,
                                 task_states.IMAGE_BACKUP)
 
