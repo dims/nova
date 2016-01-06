@@ -97,6 +97,7 @@ nova.tests.unit.db.test_migrations.TestNovaMigrationsMySQL
 nova.tests.unit.db.test_migrations.TestNovaMigrationsPostgreSQL
 nova.tests.unit.db.test_migrations.TestNovaMigrationsSQLite
 nova.tests.unit.image.test_fake.FakeImageServiceTestCase
+nova.tests.unit.image.test_glance.TestDownloadNoDirectUri
 nova.tests.unit.image.test_s3.TestS3ImageService
 nova.tests.unit.keymgr.test_barbican.BarbicanKeyManagerTestCase
 nova.tests.unit.keymgr.test_conf_key_mgr.ConfKeyManagerTestCase
