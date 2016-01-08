@@ -742,12 +742,21 @@ class LibvirtConnTestCase(test.NoDBTestCase):
     @mock.patch.object(libvirt_driver.LOG, 'warning')
     def test_next_min_version_deprecation_warning(self, mock_warning,
                                                   mock_get_libversion):
+        # Skip test if there's no currently planned new min version
+        if (versionutils.convert_version_to_int(
+                libvirt_driver.NEXT_MIN_LIBVIRT_VERSION) ==
+            versionutils.convert_version_to_int(
+                libvirt_driver.MIN_LIBVIRT_VERSION)):
+            self.skipTest("NEXT_MIN_LIBVIRT_VERSION == MIN_LIBVIRT_VERSION")
+
         # Test that a warning is logged if the libvirt version is less than
         # the next required minimum version.
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
         drvr.init_host("dummyhost")
         # assert that the next min version is in a warning message
-        expected_arg = {'version': '0.10.2'}
+        expected_arg = {'version': versionutils.convert_version_to_str(
+            versionutils.convert_version_to_int(
+                libvirt_driver.NEXT_MIN_LIBVIRT_VERSION))}
         version_arg_found = False
         for call in mock_warning.call_args_list:
             if call[0][1] == expected_arg:
@@ -760,12 +769,22 @@ class LibvirtConnTestCase(test.NoDBTestCase):
                             libvirt_driver.NEXT_MIN_LIBVIRT_VERSION))
     @mock.patch.object(libvirt_driver.LOG, 'warning')
     def test_next_min_version_ok(self, mock_warning, mock_get_libversion):
+        # Skip test if there's no currently planned new min version
+
+        if (versionutils.convert_version_to_int(
+                libvirt_driver.NEXT_MIN_LIBVIRT_VERSION) ==
+            versionutils.convert_version_to_int(
+                libvirt_driver.MIN_LIBVIRT_VERSION)):
+            self.skipTest("NEXT_MIN_LIBVIRT_VERSION == MIN_LIBVIRT_VERSION")
+
         # Test that a warning is not logged if the libvirt version is greater
         # than or equal to NEXT_MIN_LIBVIRT_VERSION.
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
         drvr.init_host("dummyhost")
         # assert that the next min version is in a warning message
-        expected_arg = {'version': '0.10.2'}
+        expected_arg = {'version': versionutils.convert_version_to_str(
+            versionutils.convert_version_to_int(
+                libvirt_driver.NEXT_MIN_LIBVIRT_VERSION))}
         version_arg_found = False
         for call in mock_warning.call_args_list:
             if call[0][1] == expected_arg:
@@ -5167,24 +5186,6 @@ class LibvirtConnTestCase(test.NoDBTestCase):
                           instance,
                           "/dev/sda")
 
-    @mock.patch.object(fakelibvirt.virConnect, "getLibVersion")
-    def test_attach_blockio_invalid_version(self, mock_version):
-        mock_version.return_value = (0 * 1000 * 1000) + (9 * 1000) + 8
-        self.flags(virt_type='qemu', group='libvirt')
-        self.create_fake_libvirt_mock()
-        libvirt_driver.LibvirtDriver._conn.lookupByName = self.fake_lookup
-        instance = objects.Instance(**self.test_instance)
-        self.mox.ReplayAll()
-        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
-        self.assertRaises(exception.Invalid,
-                          drvr.attach_volume, None,
-                          {"driver_volume_type": "fake",
-                           "data": {"logical_block_size": "4096",
-                                    "physical_block_size": "4096"}
-                          },
-                          instance,
-                          "/dev/sda")
-
     @mock.patch('nova.utils.get_image_from_system_metadata')
     @mock.patch('nova.virt.libvirt.blockinfo.get_info_from_bdm')
     @mock.patch('nova.virt.libvirt.host.Host.get_domain')
@@ -8044,7 +8045,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             return
 
         def fake_getLibVersion():
-            return 9011
+            return fakelibvirt.FAKE_LIBVIRT_VERSION
 
         def fake_getCapabilities():
             return """
@@ -11797,7 +11798,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         self.resultXML = None
 
         def fake_getLibVersion():
-            return 9011
+            return fakelibvirt.FAKE_LIBVIRT_VERSION
 
         def fake_getCapabilities():
             return """
@@ -15047,11 +15048,11 @@ class LibvirtVolumeSnapshotTestCase(test.NoDBTestCase):
                        mock.Mock(return_value=True))
     @mock.patch("nova.virt.libvirt.guest.Guest.is_active",
                  mock.Mock(return_value=False))
-    @mock.patch('nova.virt.libvirt.utils.get_disk_type',
-                return_value="fake_fmt")
+    @mock.patch('nova.virt.images.qemu_img_info',
+                return_value=mock.Mock(file_format="fake_fmt"))
     @mock.patch('nova.utils.execute')
     def test_volume_snapshot_delete_when_dom_not_running(self, mock_execute,
-                                                         mock_get_disk_type):
+                                                         mock_qemu_img_info):
         """Deleting newest snapshot of a file-based image when the domain is
         not running should trigger a blockRebase using qemu-img not libvirt.
         In this test, we rebase the image with another image as backing file.
@@ -15067,7 +15068,7 @@ class LibvirtVolumeSnapshotTestCase(test.NoDBTestCase):
                                               self.volume_uuid, snapshot_id,
                                               self.delete_info_1)
 
-        mock_get_disk_type.assert_called_once_with("snap.img")
+        mock_qemu_img_info.assert_called_once_with("snap.img")
         mock_execute.assert_called_once_with('qemu-img', 'rebase',
                                              '-b', 'snap.img', '-F',
                                              'fake_fmt', 'disk1_file')
@@ -15076,11 +15077,11 @@ class LibvirtVolumeSnapshotTestCase(test.NoDBTestCase):
                        mock.Mock(return_value=True))
     @mock.patch("nova.virt.libvirt.guest.Guest.is_active",
                  mock.Mock(return_value=False))
-    @mock.patch('nova.virt.libvirt.utils.get_disk_type',
-                return_value="fake_fmt")
+    @mock.patch('nova.virt.images.qemu_img_info',
+                return_value=mock.Mock(file_format="fake_fmt"))
     @mock.patch('nova.utils.execute')
     def test_volume_snapshot_delete_when_dom_not_running_and_no_rebase_base(
-        self, mock_execute, mock_get_disk_type):
+        self, mock_execute, mock_qemu_img_info):
         """Deleting newest snapshot of a file-based image when the domain is
         not running should trigger a blockRebase using qemu-img not libvirt.
         In this test, the image is rebased onto no backing file (i.e.
@@ -15097,7 +15098,7 @@ class LibvirtVolumeSnapshotTestCase(test.NoDBTestCase):
                                               self.volume_uuid, snapshot_id,
                                               self.delete_info_3)
 
-        self.assertEqual(0, mock_get_disk_type.call_count)
+        self.assertEqual(0, mock_qemu_img_info.call_count)
         mock_execute.assert_called_once_with('qemu-img', 'rebase',
                                              '-b', '', 'disk1_file')
 
@@ -15513,7 +15514,7 @@ class LibvirtVolumeSnapshotTestCase(test.NoDBTestCase):
         self.mox.VerifyAll()
 
 
-def _fake_convert_image(source, dest, out_format,
+def _fake_convert_image(source, dest, in_format, out_format,
                                run_as_root=True):
     libvirt_driver.libvirt_utils.files[dest] = ''
 
@@ -15662,7 +15663,8 @@ class LVMSnapshotTests(_BaseSnapshotTests):
 
         mock_volume_info.assert_has_calls([mock.call('/dev/nova-vg/lv')])
         mock_convert_image.assert_called_once_with(
-                '/dev/nova-vg/lv', mock.ANY, disk_format, run_as_root=True)
+            '/dev/nova-vg/lv', mock.ANY, 'raw', disk_format,
+            run_as_root=True)
 
     def test_raw(self):
         self._test_lvm_snapshot('raw')

@@ -45,21 +45,29 @@ import nova.image.download as image_xfers
 glance_opts = [
     cfg.StrOpt('host',
                default='$my_ip',
-               help='Default glance hostname or IP address'),
+               # TODO(sdague): remove in N
+               deprecated_for_removal=True,
+               help='Glance server hostname or IP address'),
     cfg.IntOpt('port',
                default=9292,
                min=1,
                max=65535,
-               help='Default glance port'),
+               # TODO(sdague): remove in N
+               deprecated_for_removal=True,
+               help='Glance server port'),
     cfg.StrOpt('protocol',
                 default='http',
                 choices=('http', 'https'),
-                help='Default protocol to use when connecting to glance. '
+                # TODO(sdague): remove in N
+                deprecated_for_removal=True,
+                help='Protocol to use when connecting to glance. '
                      'Set to https for SSL.'),
     cfg.ListOpt('api_servers',
-                help='A list of the glance api servers available to nova. '
-                     'Prefix with https:// for ssl-based glance api servers. '
-                     '([hostname|ip]:port)'),
+                help='''
+A list of the glance api servers endpoints available to nova. These
+should be fully qualified urls of the form
+"scheme://hostname:port[/path]" (i.e. "http://10.0.1.0:9292" or
+"https://my.glance.server/image")'''),
     cfg.BoolOpt('api_insecure',
                 default=False,
                 help='Allow to perform insecure SSL (https) requests to '
@@ -128,7 +136,7 @@ def _glanceclient_from_endpoint(context, endpoint, version=1):
         # NOTE(sdague): even if we aren't using keystone, it doesn't
         # hurt to send these headers.
         params['identity_headers'] = generate_identity_headers(context)
-        if endpoint.use_ssl:
+        if endpoint.startswith('https://'):
             # https specific params
             params['insecure'] = CONF.glance.api_insecure
             params['ssl_compression'] = False
@@ -139,7 +147,7 @@ def _glanceclient_from_endpoint(context, endpoint, version=1):
                 params['key_file'] = CONF.ssl.key_file
             if CONF.ssl.ca_file:
                 params['cacert'] = CONF.ssl.ca_file
-        return glanceclient.Client(str(version), endpoint.url, **params)
+        return glanceclient.Client(str(version), endpoint, **params)
 
 
 def _determine_curr_major_version(endpoint):
@@ -180,7 +188,7 @@ def get_api_servers():
                     "please update [glance] api_servers with fully "
                     "qualified url including scheme (http / https)"),
                 api_server)
-        api_servers.append(GlanceEndpoint(url=api_server))
+        api_servers.append(api_server)
     random.shuffle(api_servers)
     return itertools.cycle(api_servers)
 
@@ -190,7 +198,6 @@ class GlanceClientWrapper(object):
 
     def __init__(self, context=None, endpoint=None, version=1):
         if endpoint is not None:
-            endpoint = GlanceEndpoint(url=endpoint)
             self.client = self._create_static_client(context,
                                                      endpoint,
                                                      version)
@@ -245,54 +252,6 @@ class GlanceClientWrapper(object):
                     raise exception.GlanceConnectionFailed(
                         server=str(self.api_server), reason=six.text_type(e))
                 time.sleep(1)
-
-
-class GlanceEndpoint(object):
-    """Provides a container to encapsulate glance endpoints.
-
-    In transitioning from handing around metadata that lets us build
-    an endpoint url, to actually just handing around the url, we need
-    a container which can encapsulate either. This allows for a
-    smoother transition to new code.
-
-    """
-
-    def __init__(self, **kwargs):
-        self.url = kwargs.get('url', None)
-
-        if self.url is None:
-            host = kwargs['host']
-            self.url = '%s://%s:%s' % (
-                'https' if kwargs.get('use_ssl', False) else 'http',
-                '[' + host + ']' if netutils.is_valid_ipv6(host) else host,
-                kwargs['port'])
-
-    def as_tuple(self):
-        parts = urlparse.urlparse(self.url)
-        host = parts.netloc.rsplit(':', 1)[0]
-        if host[0] == '[' and host[-1] == ']':
-            host = host[1:-1]
-        use_ssl = (parts.scheme == 'https')
-        port = parts.port or (443 if use_ssl else 80)
-        return (host, port, use_ssl)
-
-    @property
-    def host(self):
-        """Compute the host"""
-        return self.as_tuple()[0]
-
-    @property
-    def port(self):
-        """Compute the port"""
-        return self.as_tuple()[1]
-
-    @property
-    def use_ssl(self):
-        """Compute the use_ssl value"""
-        return self.as_tuple()[2]
-
-    def __str__(self):
-        return self.url
 
 
 class GlanceImageService(object):
