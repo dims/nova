@@ -206,6 +206,7 @@ metrics_weight_opts = [
 
 scheduler_max_att_opt = cfg.IntOpt("scheduler_max_attempts",
             default=3,
+            min=1,
             help="Maximum number of attempts to schedule an instance")
 
 soft_affinity_weight_opt = cfg.FloatOpt('soft_affinity_weight_multiplier',
@@ -269,3 +270,11 @@ def register_opts(conf):
     conf.register_group(trust_group)
     conf.register_opts(trusted_opts, group=trust_group)
     conf.register_opts(metrics_weight_opts, group="metrics")
+
+
+def list_opts():
+    return {"DEFAULT": SIMPLE_OPTS,
+            "upgrade_levels": [rpcapi_cap_opt],
+            "trusted_computing": trusted_opts,
+            "metrics": metrics_weight_opts,
+            }

@@ -272,7 +272,12 @@ libvirt_opts = [
                 default=[],
                 help='List of guid targets and ranges.'
                      'Syntax is guest-gid:host-gid:count'
-                     'Maximum of 5 allowed.')
+                     'Maximum of 5 allowed.'),
+    cfg.IntOpt('realtime_scheduler_priority',
+               default=1,
+               help='In a realtime host context vCPUs for guest will run in '
+               'that scheduling priority. Priority depends on the host '
+               'kernel (usually 1-99)')
     ]
 
 CONF = cfg.CONF
@@ -443,6 +448,9 @@ MIN_LIBVIRT_PF_WITH_NO_VFS_CAP_VERSION = (1, 3, 0)
 
 # Names of the types that do not get compressed during migration
 NO_COMPRESSION_TYPES = ('qcow2',)
+
+# realtime suppport
+MIN_LIBVIRT_REALTIME_VERSION = (1, 2, 13)
 
 
 class LibvirtDriver(driver.ComputeDriver):
@@ -1095,6 +1103,23 @@ class LibvirtDriver(driver.ComputeDriver):
                                                     **encryption)
         return encryptor
 
+    def _check_discard_for_attach_volume(self, conf, instance):
+        """Perform some checks for volumes configured for discard support.
+
+        If discard is configured for the volume, and the guest is using a
+        configuration known to not work, we will log a message explaining
+        the reason why.
+        """
+        if conf.driver_discard == 'unmap' and conf.target_bus == 'virtio':
+            LOG.debug('Attempting to attach volume %(id)s with discard '
+                      'support enabled to an instance using an '
+                      'unsupported configuration. target_bus = '
+                      '%(bus)s. Trim commands will not be issued to '
+                      'the storage device.',
+                      {'bus': conf.target_bus,
+                       'id': conf.serial},
+                      instance=instance)
+
     def attach_volume(self, context, connection_info, instance, mountpoint,
                       disk_bus=None, device_type=None, encryption=None):
         image_meta = objects.ImageMeta.from_instance(instance)
@@ -1127,6 +1152,8 @@ class LibvirtDriver(driver.ComputeDriver):
         self._connect_volume(connection_info, disk_info)
         conf = self._get_volume_config(connection_info, disk_info)
         self._set_cache_mode(conf)
+
+        self._check_discard_for_attach_volume(conf, instance)
 
         try:
             state = guest.get_power_state(self._host)
@@ -3649,7 +3676,7 @@ class LibvirtDriver(driver.ComputeDriver):
         return False
 
     def _get_guest_numa_config(self, instance_numa_topology, flavor, pci_devs,
-                               allowed_cpus=None):
+                               allowed_cpus=None, image_meta=None):
         """Returns the config objects for the guest NUMA specs.
 
         Determines the CPUs that the guest can be pinned to if the guest
@@ -3764,6 +3791,23 @@ class LibvirtDriver(driver.ComputeDriver):
                 guest_cpu_tune.emulatorpin = emulatorpin
                 # Sort the vcpupin list per vCPU id for human-friendlier XML
                 guest_cpu_tune.vcpupin.sort(key=operator.attrgetter("id"))
+
+                if hardware.is_realtime_enabled(flavor):
+                    if not self._host.has_min_version(
+                            MIN_LIBVIRT_REALTIME_VERSION):
+                        raise exception.RealtimePolicyNotSupported()
+
+                    vcpus_rt, vcpus_em = hardware.vcpus_realtime_topology(
+                        set(cpu.id for cpu in guest_cpu_tune.vcpupin),
+                        flavor, image_meta)
+
+                    vcpusched = vconfig.LibvirtConfigGuestCPUTuneVCPUSched()
+                    vcpusched.vcpus = vcpus_rt
+                    vcpusched.scheduler = "fifo"
+                    vcpusched.priority = (
+                        CONF.libvirt.realtime_scheduler_priority)
+                    guest_cpu_tune.vcpusched.append(vcpusched)
+                    guest_cpu_tune.emulatorpin.cpuset = vcpus_em
 
                 guest_numa_tune.memory = numa_mem
                 guest_numa_tune.memnodes = numa_memnodes
@@ -4005,13 +4049,16 @@ class LibvirtDriver(driver.ComputeDriver):
         if rng_is_virtio and rng_allowed:
             self._add_rng_device(guest, flavor)
 
-    def _get_guest_memory_backing_config(self, inst_topology, numatune):
+    def _get_guest_memory_backing_config(
+            self, inst_topology, numatune, flavor):
         wantsmempages = False
         if inst_topology:
             for cell in inst_topology.cells:
                 if cell.pagesize:
                     wantsmempages = True
                     break
+
+        wantsrealtime = hardware.is_realtime_enabled(flavor)
 
         membacking = None
         if wantsmempages:
@@ -4020,6 +4067,11 @@ class LibvirtDriver(driver.ComputeDriver):
             if pages:
                 membacking = vconfig.LibvirtConfigGuestMemoryBacking()
                 membacking.hugepages = pages
+        if wantsrealtime:
+            if not membacking:
+                membacking = vconfig.LibvirtConfigGuestMemoryBacking()
+            membacking.locked = True
+            membacking.sharedpages = False
 
         return membacking
 
@@ -4206,7 +4258,7 @@ class LibvirtDriver(driver.ComputeDriver):
         pci_devs = pci_manager.get_instance_pci_devs(instance, 'all')
 
         guest_numa_config = self._get_guest_numa_config(
-                instance.numa_topology, flavor, pci_devs, allowed_cpus)
+            instance.numa_topology, flavor, pci_devs, allowed_cpus, image_meta)
 
         guest.cpuset = guest_numa_config.cpuset
         guest.cputune = guest_numa_config.cputune
@@ -4214,7 +4266,8 @@ class LibvirtDriver(driver.ComputeDriver):
 
         guest.membacking = self._get_guest_memory_backing_config(
             instance.numa_topology,
-            guest_numa_config.numatune)
+            guest_numa_config.numatune,
+            flavor)
 
         guest.metadata.append(self._get_guest_config_meta(context,
                                                           instance))
@@ -4824,7 +4877,7 @@ class LibvirtDriver(driver.ComputeDriver):
                         fun_cap.device_addrs[0][3])
                     return {
                         'dev_type': fields.PciDeviceType.SRIOV_VF,
-                        'phys_function': phys_address,
+                        'parent_addr': phys_address,
                     }
 
             # Note(moshele): libvirt < 1.3 reported virt_functions capability
@@ -6123,8 +6176,7 @@ class LibvirtDriver(driver.ComputeDriver):
 
         disk_paths = []
         if block_migration:
-            disk_paths = self._live_migration_copy_disk_paths(
-                context, instance, guest)
+            disk_paths = self._live_migration_copy_disk_paths(guest)
 
         # TODO(sahid): We are converting all calls from a
         # virDomain object to use nova.virt.libvirt.Guest.

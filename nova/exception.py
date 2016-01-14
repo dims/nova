@@ -1974,6 +1974,11 @@ class ImageCPUPinningForbidden(Forbidden):
                 "CPU pinning policy set against the flavor")
 
 
+class ImageCPUThreadPolicyForbidden(Forbidden):
+    msg_fmt = _("Image property 'hw_cpu_thread_policy' is not permitted to "
+                "override CPU thread pinning policy set against the flavor")
+
+
 class UnsupportedPolicyException(Invalid):
     msg_fmt = _("ServerGroup policy is not supported: %(reason)s")
 
@@ -2015,6 +2020,11 @@ class RealtimeConfigurationInvalid(Invalid):
                 "cpu pinning policy")
 
 
+class CPUThreadPolicyConfigurationInvalid(Invalid):
+    msg_fmt = _("Cannot set cpu thread pinning policy in a non dedicated "
+                "cpu pinning policy")
+
+
 class RequestSpecNotFound(NotFound):
     msg_fmt = _("RequestSpec not found for instance %(instance_uuid)s")
 
@@ -2025,3 +2035,13 @@ class NMINotSupported(Invalid):
 
 class UnsupportedHostCPUControlPolicy(Invalid):
     msg_fmt = _("Requested CPU control policy not supported by host")
+
+
+class RealtimePolicyNotSupported(Invalid):
+    msg_fmt = _("Realtime policy not supported by hypervisor")
+
+
+class RealtimeMaskNotFoundOrInvalid(Invalid):
+    msg_fmt = _("Realtime policy needs vCPU(s) mask configured with at least "
+                "1 RT vCPU and 1 ordinary vCPU. See hw:cpu_realtime_mask "
+                "or hw_cpu_realtime_mask")

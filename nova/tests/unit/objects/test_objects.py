@@ -1133,7 +1133,7 @@ object_data = {
     'HostMapping': '1.0-1a3390a696792a552ab7bd31a77ba9ac',
     'HVSpec': '1.2-db672e73304da86139086d003f3977e7',
     'ImageMeta': '1.8-642d1b2eb3e880a367f37d72dd76162d',
-    'ImageMetaProps': '1.9-cfeffdf93c0ec4745d66dc286559db91',
+    'ImageMetaProps': '1.10-0f1c0f7d7d4cca0facd47524633ca9d1',
     'Instance': '2.0-ff56804dce87d81d9a04834d4bd1e3d2',
     'InstanceAction': '1.1-f9f293e526b66fca0d05c3b3a2d13914',
     'InstanceActionEvent': '1.1-e56a64fa4710e43ef7af2ad9d6028b33',
@@ -1148,7 +1148,7 @@ object_data = {
     'InstanceList': '2.0-6c8ba6147cca3082b1e4643f795068bf',
     'InstanceMapping': '1.0-47ef26034dfcbea78427565d9177fe50',
     'InstanceMappingList': '1.0-9e982e3de1613b9ada85e35f69b23d47',
-    'InstanceNUMACell': '1.2-535ef30e0de2d6a0d26a71bd58ecafc4',
+    'InstanceNUMACell': '1.3-6991a20992c5faa57fae71a45b40241b',
     'InstanceNUMATopology': '1.2-d944a7d6c21e1c773ffdf09c6d025954',
     'InstancePCIRequest': '1.1-b1d75ebc716cb12906d9d513890092bf',
     'InstancePCIRequests': '1.1-65e38083177726d806684cb1cc0136d2',
@@ -1169,8 +1169,8 @@ object_data = {
     'NetworkList': '1.2-69eca910d8fa035dfecd8ba10877ee59',
     'NetworkRequest': '1.1-7a3e4ca2ce1e7b62d8400488f2f2b756',
     'NetworkRequestList': '1.1-15ecf022a68ddbb8c2a6739cfc9f8f5e',
-    'PciDevice': '1.3-d92e0b17bbed61815b919af6b8d8998e',
-    'PciDeviceList': '1.2-3757458c45591cbc92c72ee99e757c98',
+    'PciDevice': '1.4-4f54e80054bbb6414e17eb9babc97a44',
+    'PciDeviceList': '1.3-52ff14355491c8c580bdc0ba34c26210',
     'PciDevicePool': '1.1-3f5ddc3ff7bfa14da7f6c7e9904cc000',
     'PciDevicePoolList': '1.1-15ecf022a68ddbb8c2a6739cfc9f8f5e',
     'Quotas': '1.2-1fe4cd50593aaf5d36a6dc5ab3f98fb3',
@@ -1195,6 +1195,7 @@ object_data = {
     'VirtualInterface': '1.0-19921e38cba320f355d56ecbf8f29587',
     'VirtualInterfaceList': '1.0-9750e2074437b3077e46359102779fc6',
     'VolumeUsage': '1.0-6c8190c46ce1469bb3286a1f21c2e475',
+    'XenapiLiveMigrateData': '1.0-5f982bec68f066e194cd9ce53a24ac4c',
 }
 
 

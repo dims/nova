@@ -28,7 +28,7 @@ LOG = logging.getLogger(__name__)
 
 
 # NOTE(danms): This is the global service version counter
-SERVICE_VERSION = 3
+SERVICE_VERSION = 4
 
 
 # NOTE(danms): This is our SERVICE_VERSION history. The idea is that any
@@ -57,6 +57,8 @@ SERVICE_VERSION_HISTORY = (
     # Version 2: Changes to rebuild_instance signature in the compute_rpc
     {'compute_rpc': '4.5'},
     # Version 3: Add trigger_crash_dump method to compute rpc api
+    {'compute_rpc': '4.6'},
+    # Version 4: Add PciDevice.parent_addr (data migration needed)
     {'compute_rpc': '4.6'},
 )
 
@@ -101,6 +103,9 @@ class Service(base.NovaPersistentObject, base.NovaObject,
         'forced_down': fields.BooleanField(),
         'version': fields.IntegerField(),
     }
+
+    _MIN_VERSION_CACHE = {}
+    _SERVICE_VERSION_CACHING = False
 
     def __init__(self, *args, **kwargs):
         # NOTE(danms): We're going against the rules here and overriding
@@ -279,6 +284,15 @@ class Service(base.NovaPersistentObject, base.NovaObject,
     def destroy(self):
         db.service_destroy(self._context, self.id)
 
+    @classmethod
+    def enable_min_version_cache(cls):
+        cls.clear_min_version_cache()
+        cls._SERVICE_VERSION_CACHING = True
+
+    @classmethod
+    def clear_min_version_cache(cls):
+        cls._MIN_VERSION_CACHE = {}
+
     @base.remotable_classmethod
     def get_minimum_version(cls, context, binary, use_slave=False):
         if not binary.startswith('nova-'):
@@ -286,13 +300,21 @@ class Service(base.NovaPersistentObject, base.NovaObject,
                             'binary `%s\''), binary)
             raise exception.ObjectActionError(action='get_minimum_version',
                                               reason='Invalid binary prefix')
+
+        if cls._SERVICE_VERSION_CACHING:
+            cached_version = cls._MIN_VERSION_CACHE.get(binary)
+            if cached_version:
+                return cached_version
         version = db.service_get_minimum_version(context, binary,
                                                  use_slave=use_slave)
         if version is None:
             return 0
         # NOTE(danms): Since our return value is not controlled by object
         # schema, be explicit here.
-        return int(version)
+        version = int(version)
+        cls._MIN_VERSION_CACHE[binary] = version
+
+        return version
 
 
 @base.NovaObjectRegistry.register
