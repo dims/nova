@@ -753,7 +753,7 @@ class XenAPIVMTestCase(stubs.XenAPITestBase):
             instance = objects.Instance.get_by_id(self.context, instance_id,
                                                   expected_attrs=['flavor'])
 
-        network_info = fake_network.fake_get_instance_nw_info(self.stubs)
+        network_info = fake_network.fake_get_instance_nw_info(self)
         if empty_dns:
             # NOTE(tr3buchet): this is a terrible way to do this...
             network_info[0]['network']['subnets'][0]['dns'] = []
@@ -1560,7 +1560,7 @@ iface eth0 inet6 static
 
         instance = create_instance_with_system_metadata(self.context,
                                                         instance_values)
-        network_info = fake_network.fake_get_instance_nw_info(self.stubs)
+        network_info = fake_network.fake_get_instance_nw_info(self)
         image_meta = {'id': IMAGE_VHD,
                       'disk_format': 'vhd'}
         if spawn:
@@ -1588,7 +1588,7 @@ iface eth0 inet6 static
                        fake_destroy_kernel_ramdisk)
 
         instance = self._create_instance(spawn=True, obj=True)
-        network_info = fake_network.fake_get_instance_nw_info(self.stubs)
+        network_info = fake_network.fake_get_instance_nw_info(self)
         self.conn.destroy(self.context, instance, network_info)
 
         vm_ref = vm_utils.lookup(self.conn._session, instance['name'])
@@ -1770,7 +1770,7 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
         self.mox.StubOutWithMock(volume_utils, 'is_booted_from_volume')
 
         conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
-        network_info = fake_network.fake_get_instance_nw_info(self.stubs)
+        network_info = fake_network.fake_get_instance_nw_info(self)
         image_meta = {'id': instance['image_ref'], 'disk_format': 'vhd'}
         base = xenapi_fake.create_vdi('hurr', 'fake')
         base_uuid = xenapi_fake.get_record('VDI', base)['uuid']
@@ -1812,7 +1812,7 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
                               product_brand='XenServer')
 
         conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
-        network_info = fake_network.fake_get_instance_nw_info(self.stubs)
+        network_info = fake_network.fake_get_instance_nw_info(self)
         image_meta = {'id': instance['image_ref'], 'disk_format': 'vhd'}
         conn.finish_migration(self.context, self.migration, instance,
                               dict(base_copy='hurr', cow='durr'),
@@ -1839,7 +1839,7 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
         self.stubs.Set(stubs.FakeSessionForVMTests,
                        "VDI_resize_online", fake_vdi_resize)
         conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
-        network_info = fake_network.fake_get_instance_nw_info(self.stubs)
+        network_info = fake_network.fake_get_instance_nw_info(self)
         image_meta = {'id': instance['image_ref'], 'disk_format': 'vhd'}
         conn.finish_migration(self.context, self.migration, instance,
                               dict(base_copy='hurr', cow='durr'),
@@ -1855,7 +1855,7 @@ class XenAPIMigrateInstance(stubs.XenAPITestBase):
         self.stubs.Set(stubs.FakeSessionForVMTests,
                        "VDI_resize_online", fake_vdi_resize)
         conn = xenapi_conn.XenAPIDriver(fake.FakeVirtAPI(), False)
-        network_info = fake_network.fake_get_instance_nw_info(self.stubs)
+        network_info = fake_network.fake_get_instance_nw_info(self)
         # Resize instance would be determined by the compute call
         image_meta = {'id': instance['image_ref'], 'disk_format': 'vhd'}
         conn.finish_migration(self.context, self.migration, instance,
@@ -2762,7 +2762,7 @@ class XenAPIDom0IptablesFirewallTestCase(stubs.XenAPITestBase):
         instance_ref = db.instance_get(admin_ctxt, instance_ref['id'])
         src_instance_ref = db.instance_get(admin_ctxt, src_instance_ref['id'])
 
-        network_model = fake_network.fake_get_instance_nw_info(self.stubs, 1)
+        network_model = fake_network.fake_get_instance_nw_info(self, 1)
 
         from nova.compute import utils as compute_utils  # noqa
         self.stubs.Set(compute_utils, 'get_nw_info_for_instance',
@@ -2785,14 +2785,14 @@ class XenAPIDom0IptablesFirewallTestCase(stubs.XenAPITestBase):
 
     def test_filters_for_instance_with_ip_v6(self):
         self.flags(use_ipv6=True)
-        network_info = fake_network.fake_get_instance_nw_info(self.stubs, 1)
+        network_info = fake_network.fake_get_instance_nw_info(self, 1)
         rulesv4, rulesv6 = self.fw._filters_for_instance("fake", network_info)
         self.assertEqual(len(rulesv4), 2)
         self.assertEqual(len(rulesv6), 1)
 
     def test_filters_for_instance_without_ip_v6(self):
         self.flags(use_ipv6=False)
-        network_info = fake_network.fake_get_instance_nw_info(self.stubs, 1)
+        network_info = fake_network.fake_get_instance_nw_info(self, 1)
         rulesv4, rulesv6 = self.fw._filters_for_instance("fake", network_info)
         self.assertEqual(len(rulesv4), 2)
         self.assertEqual(len(rulesv6), 0)
@@ -2805,7 +2805,7 @@ class XenAPIDom0IptablesFirewallTestCase(stubs.XenAPITestBase):
         networks_count = 5
         instance_ref = self._create_instance_ref()
         _get_instance_nw_info = fake_network.fake_get_instance_nw_info
-        network_info = _get_instance_nw_info(self.stubs,
+        network_info = _get_instance_nw_info(self,
                                              networks_count,
                                              ipv4_addr_per_network)
         network_info[0]['network']['subnets'][0]['meta']['dhcp_server'] = \
@@ -2829,7 +2829,7 @@ class XenAPIDom0IptablesFirewallTestCase(stubs.XenAPITestBase):
     def test_do_refresh_security_group_rules(self):
         admin_ctxt = context.get_admin_context()
         instance_ref = self._create_instance_ref()
-        network_info = fake_network.fake_get_instance_nw_info(self.stubs, 1, 1)
+        network_info = fake_network.fake_get_instance_nw_info(self, 1, 1)
         secgroup = self._create_test_security_group()
         db.instance_add_security_group(admin_ctxt, instance_ref['uuid'],
                                        secgroup['id'])
@@ -2859,7 +2859,7 @@ class XenAPIDom0IptablesFirewallTestCase(stubs.XenAPITestBase):
         # peeks at how the firewall names chains
         chain_name = 'inst-%s' % instance_ref['id']
 
-        network_info = fake_network.fake_get_instance_nw_info(self.stubs, 1, 1)
+        network_info = fake_network.fake_get_instance_nw_info(self, 1, 1)
         self.fw.prepare_instance_filter(instance_ref, network_info)
         self.assertIn('provider', self.fw.iptables.ipv4['filter'].chains)
         rules = [rule for rule in self.fw.iptables.ipv4['filter'].rules
@@ -3537,16 +3537,16 @@ class XenAPILiveMigrateTestCase(stubs.XenAPITestBaseNoDB):
         self.stubs.Set(self.conn._vmops, "_make_plugin_call",
                        fake_make_plugin_call)
 
-        dest_check_data = {'block_migration': True,
-                           'is_volume_backed': True,
-                           'migrate_data': {
-                            'destination_sr_ref': None,
-                            'migrate_send_data': None
-                           }}
+        dest_check_data = objects.XenapiLiveMigrateData(
+            block_migration=True,
+            is_volume_backed=True,
+            destination_sr_ref=None,
+            migrate_send_data=None)
         result = self.conn.check_can_live_migrate_source(self.context,
                                                          {'host': 'host'},
                                                          dest_check_data)
-        self.assertEqual(dest_check_data, result.to_legacy_dict())
+        self.assertEqual(dest_check_data.to_legacy_dict(),
+                         result.to_legacy_dict())
 
     def test_check_can_live_migrate_source_with_block_iscsi_fails(self):
         stubs.stubout_session(self.stubs, stubs.FakeSessionForVMTests)
@@ -3677,8 +3677,9 @@ class XenAPILiveMigrateTestCase(stubs.XenAPITestBaseNoDB):
             post_method.called = True
 
         # pass block_migration = True and migrate data
-        migrate_data = {"destination_sr_ref": "foo",
-                        "migrate_send_data": "bar"}
+        migrate_data = objects.XenapiLiveMigrateData(
+            destination_sr_ref="foo",
+            migrate_send_data={"bar": "baz"})
         self.conn.live_migration(self.conn, None, None, post_method, None,
                                  True, migrate_data)
         self.assertTrue(post_method.called, "post_method.called")
@@ -3703,8 +3704,9 @@ class XenAPILiveMigrateTestCase(stubs.XenAPITestBaseNoDB):
                         block_migration, migrate_data):
             post_method.called = True
 
-        migrate_data = {"destination_sr_ref": "foo",
-                        "migrate_send_data": "bar"}
+        migrate_data = objects.XenapiLiveMigrateData(
+            destination_sr_ref="foo",
+            migrate_send_data={"bar": "baz"})
         self.conn.live_migration(self.conn, None, None, post_method, None,
                                  True, migrate_data)
 
@@ -3737,7 +3739,9 @@ class XenAPILiveMigrateTestCase(stubs.XenAPITestBaseNoDB):
                            block_migration):
             recover_method.called = True
         # pass block_migration = True and migrate data
-        migrate_data = dict(destination_sr_ref='foo', migrate_send_data='bar')
+        migrate_data = objects.XenapiLiveMigrateData(
+            destination_sr_ref='foo',
+            migrate_send_data={'bar': 'baz'})
         self.assertRaises(exception.MigrationError,
                           self.conn.live_migration, self.conn,
                           None, None, None, recover_method, True, migrate_data)
@@ -3750,7 +3754,7 @@ class XenAPILiveMigrateTestCase(stubs.XenAPITestBaseNoDB):
         class Session(xenapi_fake.SessionBase):
             def VM_migrate_send(self_, session, vmref, migrate_data, islive,
                                 vdi_map, vif_map, options):
-                self.assertEqual('SOMEDATA', migrate_data)
+                self.assertEqual({'SOMEDATA': 'SOMEVAL'}, migrate_data)
                 self.assertEqual(fake_vdi_map, vdi_map)
 
         stubs.stubout_session(self.stubs, Session)
@@ -3768,12 +3772,14 @@ class XenAPILiveMigrateTestCase(stubs.XenAPITestBaseNoDB):
         def dummy_callback(*args, **kwargs):
             pass
 
+        migrate_data = objects.XenapiLiveMigrateData(
+            migrate_send_data={'SOMEDATA': 'SOMEVAL'},
+            destination_sr_ref='TARGET_SR_OPAQUE_REF')
         conn.live_migration(
             self.context, instance=dict(name='ignore'), dest=None,
             post_method=dummy_callback, recover_method=dummy_callback,
             block_migration="SOMEDATA",
-            migrate_data=dict(migrate_send_data='SOMEDATA',
-                              destination_sr_ref="TARGET_SR_OPAQUE_REF"))
+            migrate_data=migrate_data)
 
     def test_live_migrate_pool_migration_xapi_call_parameters(self):
 
@@ -3796,10 +3802,13 @@ class XenAPILiveMigrateTestCase(stubs.XenAPITestBaseNoDB):
         def dummy_callback(*args, **kwargs):
             pass
 
+        migrate_data = objects.XenapiLiveMigrateData(
+            migrate_send_data={'foo': 'bar'},
+            destination_sr_ref='foo')
         self.assertRaises(IOError, conn.live_migration,
             self.context, instance=dict(name='ignore'), dest=None,
             post_method=dummy_callback, recover_method=dummy_callback,
-            block_migration=False, migrate_data={})
+            block_migration=False, migrate_data=migrate_data)
 
     def test_generate_vdi_map(self):
         stubs.stubout_session(self.stubs, xenapi_fake.SessionBase)

@@ -957,9 +957,10 @@ class LibvirtDriver(driver.ComputeDriver):
             if CONF.libvirt.images_type == 'rbd':
                 self._cleanup_rbd(instance)
 
-        if destroy_disks or (
-                migrate_data and migrate_data.get('is_shared_block_storage',
-                                                  False)):
+        is_shared_block_storage = False
+        if migrate_data and 'is_shared_block_storage' in migrate_data:
+            is_shared_block_storage = migrate_data.is_shared_block_storage
+        if destroy_disks or is_shared_block_storage:
             attempts = int(instance.system_metadata.get('clean_attempts',
                                                         '0'))
             success = self.delete_instance_files(instance)
@@ -1239,8 +1240,8 @@ class LibvirtDriver(driver.ComputeDriver):
 
         # Save updates made in connection_info when connect_volume was called
         volume_id = new_connection_info.get('serial')
-        bdm = objects.BlockDeviceMapping.get_by_volume_id(
-            nova_context.get_admin_context(), volume_id)
+        bdm = objects.BlockDeviceMapping.get_by_volume_and_instance(
+            nova_context.get_admin_context(), volume_id, instance.uuid)
         driver_bdm = driver_block_device.DriverVolumeBlockDevice(bdm)
         driver_bdm['connection_info'] = new_connection_info
         driver_bdm.save()
@@ -1498,7 +1499,8 @@ class LibvirtDriver(driver.ComputeDriver):
                     # NOTE(xqueralt): libvirt needs o+x in the temp directory
                     os.chmod(tmpdir, 0o701)
                     self._live_snapshot(context, instance, guest, disk_path,
-                                        out_path, image_format, image_meta)
+                                        out_path, source_format, image_format,
+                                        image_meta)
                 else:
                     snapshot_backend.snapshot_extract(out_path, image_format)
             finally:
@@ -1599,7 +1601,7 @@ class LibvirtDriver(driver.ComputeDriver):
         self._set_quiesced(context, instance, image_meta, False)
 
     def _live_snapshot(self, context, instance, guest, disk_path, out_path,
-                       image_format, image_meta):
+                       source_format, image_format, image_meta):
         """Snapshot an instance without downtime."""
         dev = guest.get_block_device(disk_path)
 
@@ -1617,9 +1619,11 @@ class LibvirtDriver(driver.ComputeDriver):
         #             in QEMU 1.3. In order to do this, we need to create
         #             a destination image with the original backing file
         #             and matching size of the instance root disk.
-        src_disk_size = libvirt_utils.get_disk_size(disk_path)
+        src_disk_size = libvirt_utils.get_disk_size(disk_path,
+                                                    format=source_format)
         src_back_path = libvirt_utils.get_disk_backing_file(disk_path,
-                                                            basename=False)
+                                                        format=source_format,
+                                                        basename=False)
         disk_delta = out_path + '.delta'
         libvirt_utils.create_cow_image(src_back_path, disk_delta,
                                        src_disk_size)
@@ -1790,8 +1794,8 @@ class LibvirtDriver(driver.ComputeDriver):
             raise
 
     def _volume_refresh_connection_info(self, context, instance, volume_id):
-        bdm = objects.BlockDeviceMapping.get_by_volume_id(context,
-                                                          volume_id)
+        bdm = objects.BlockDeviceMapping.get_by_volume_and_instance(
+                  context, volume_id, instance.uuid)
 
         driver_bdm = driver_block_device.convert_volume(bdm)
         if driver_bdm:
@@ -5559,11 +5563,12 @@ class LibvirtDriver(driver.ComputeDriver):
                              post_method, recover_method, block_migration,
                              migrate_data)
 
-    def _update_xml(self, xml_str, volume, listen_addrs, serial_listen_addr):
+    def _update_xml(self, xml_str, migrate_bdm_info, listen_addrs,
+                    serial_listen_addr):
         xml_doc = etree.fromstring(xml_str)
 
-        if volume:
-            xml_doc = self._update_volume_xml(xml_doc, volume)
+        if migrate_bdm_info:
+            xml_doc = self._update_volume_xml(xml_doc, migrate_bdm_info)
         if listen_addrs:
             xml_doc = self._update_graphics_xml(xml_doc, listen_addrs)
         else:
@@ -5589,24 +5594,23 @@ class LibvirtDriver(driver.ComputeDriver):
 
         return xml_doc
 
-    def _update_volume_xml(self, xml_doc, volume):
+    def _update_volume_xml(self, xml_doc, migrate_bdm_info):
         """Update XML using device information of destination host."""
 
         # Update volume xml
         parser = etree.XMLParser(remove_blank_text=True)
         disk_nodes = xml_doc.findall('./devices/disk')
+
+        bdm_info_by_serial = {x.serial: x for x in migrate_bdm_info}
         for pos, disk_dev in enumerate(disk_nodes):
             serial_source = disk_dev.findtext('serial')
-            if serial_source is None or volume.get(serial_source) is None:
+            bdm_info = bdm_info_by_serial.get(serial_source)
+            if (serial_source is None or
+                    not bdm_info or not bdm_info.connection_info or
+                    serial_source not in bdm_info_by_serial):
                 continue
-
-            if ('connection_info' not in volume[serial_source] or
-                    'disk_info' not in volume[serial_source]):
-                continue
-
             conf = self._get_volume_config(
-                volume[serial_source]['connection_info'],
-                volume[serial_source]['disk_info'])
+                bdm_info.connection_info, bdm_info.as_disk_info())
             xml_doc2 = etree.XML(conf.to_xml(), parser)
             serial_dest = xml_doc2.findtext('serial')
 
@@ -5663,9 +5667,9 @@ class LibvirtDriver(driver.ComputeDriver):
                     ' the local address (127.0.0.1 or ::1).')
             raise exception.MigrationError(reason=msg)
 
-        if listen_addrs is not None:
-            dest_local_vnc = listen_addrs['vnc'] in LOCAL_ADDRS
-            dest_local_spice = listen_addrs['spice'] in LOCAL_ADDRS
+        if listen_addrs:
+            dest_local_vnc = listen_addrs.get('vnc') in LOCAL_ADDRS
+            dest_local_spice = listen_addrs.get('spice') in LOCAL_ADDRS
 
             if ((CONF.vnc.enabled and not dest_local_vnc) or
                 (CONF.spice.enabled and not dest_local_spice)):
@@ -5730,18 +5734,20 @@ class LibvirtDriver(driver.ComputeDriver):
             flagvals = [getflag(x.strip()) for x in flaglist]
             logical_sum = six.moves.reduce(lambda x, y: x | y, flagvals)
 
-            pre_live_migrate_data = (migrate_data or {}).get(
-                                        'pre_live_migration_result', {})
-            listen_addrs = pre_live_migrate_data.get('graphics_listen_addrs')
-            volume = pre_live_migrate_data.get('volume')
-            serial_listen_addr = pre_live_migrate_data.get(
-                                     'serial_listen_addr')
+            listen_addrs = {}
+            if 'graphics_listen_addr_vnc' in migrate_data:
+                listen_addrs['vnc'] = str(
+                    migrate_data.graphics_listen_addr_vnc)
+            if 'graphics_listen_addr_spice' in migrate_data:
+                listen_addrs['spice'] = str(
+                    migrate_data.graphics_listen_addr_spice)
+            serial_listen_addr = migrate_data.serial_listen_addr
 
             migratable_flag = getattr(libvirt, 'VIR_DOMAIN_XML_MIGRATABLE',
                                       None)
 
-            if (migratable_flag is None or
-                    (listen_addrs is None and not volume)):
+            if (migratable_flag is None or (
+                    not listen_addrs and not migrate_data.bdms)):
                 # TODO(alexs-h): These checks could be moved to the
                 # check_can_live_migrate_destination/source phase
                 self._check_graphics_addresses_can_live_migrate(listen_addrs)
@@ -5753,7 +5759,7 @@ class LibvirtDriver(driver.ComputeDriver):
             else:
                 old_xml_str = guest.get_xml_desc(dump_migratable=True)
                 new_xml_str = self._update_xml(old_xml_str,
-                                               volume,
+                                               migrate_data.bdms,
                                                listen_addrs,
                                                serial_listen_addr)
                 try:
@@ -6270,18 +6276,11 @@ class LibvirtDriver(driver.ComputeDriver):
             # NOTE(gcb): Failed block live migration may leave instance
             # directory at destination node, ensure it is always deleted.
             is_shared_instance_path = True
-            instance_relative_path = None
             if migrate_data:
-                is_shared_instance_path = migrate_data.get(
-                        'is_shared_instance_path', True)
-                instance_relative_path = migrate_data.get(
-                        'instance_relative_path')
-            mdo = objects.LibvirtLiveMigrateData()
-            if instance_relative_path:
-                mdo.instance_relative_path = instance_relative_path
+                is_shared_instance_path = migrate_data.is_shared_instance_path
             if not is_shared_instance_path:
                 instance_dir = libvirt_utils.get_instance_path_at_destination(
-                    instance, mdo)
+                    instance, migrate_data)
                 if os.path.exists(instance_dir):
                         shutil.rmtree(instance_dir)
 

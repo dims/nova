@@ -1445,6 +1445,14 @@ class MigrationTestCase(test.TestCase):
             hosts = [migration['source_compute'], migration['dest_compute']]
             self.assertIn(filters["host"], hosts)
 
+    def test_get_migrations_by_filters_with_multiple_statuses(self):
+        filters = {"status": ["reverted", "confirmed"],
+                   "migration_type": None, "hidden": False}
+        migrations = db.migration_get_all_by_filters(self.ctxt, filters)
+        self.assertEqual(2, len(migrations))
+        for migration in migrations:
+            self.assertIn(migration['status'], filters['status'])
+
     def test_get_migrations_by_filters_with_type(self):
         self._create(status="special", source_compute="host9",
                      migration_type="evacuation")
@@ -6153,17 +6161,57 @@ class BlockDeviceMappingTestCase(test.TestCase):
         self.assertEqual(len(bdms), 1)
         self.assertEqual(bdms[0]['device_name'], '/dev/vda')
 
-    def test_block_device_mapping_get_by_volume_id(self):
+    def test_block_device_mapping_get_all_by_volume_id(self):
         self._create_bdm({'volume_id': 'fake_id'})
-        bdm = db.block_device_mapping_get_by_volume_id(self.ctxt, 'fake_id')
-        self.assertEqual(bdm['volume_id'], 'fake_id')
+        self._create_bdm({'volume_id': 'fake_id'})
+        bdms = db.block_device_mapping_get_all_by_volume_id(self.ctxt,
+                                                            'fake_id')
+        self.assertEqual(bdms[0]['volume_id'], 'fake_id')
+        self.assertEqual(bdms[1]['volume_id'], 'fake_id')
+        self.assertEqual(2, len(bdms))
 
-    def test_block_device_mapping_get_by_volume_id_join_instance(self):
+    def test_block_device_mapping_get_all_by_volume_id_join_instance(self):
         self._create_bdm({'volume_id': 'fake_id'})
-        bdm = db.block_device_mapping_get_by_volume_id(self.ctxt, 'fake_id',
-                ['instance'])
+        bdms = db.block_device_mapping_get_all_by_volume_id(self.ctxt,
+                                                            'fake_id',
+                                                            ['instance'])
+        self.assertEqual(bdms[0]['volume_id'], 'fake_id')
+        self.assertEqual(bdms[0]['instance']['uuid'], self.instance['uuid'])
+
+    def test_block_device_mapping_get_by_instance_and_volume_id(self):
+        self._create_bdm({'volume_id': 'fake_id'})
+        bdm = db.block_device_mapping_get_by_instance_and_volume_id(self.ctxt,
+                'fake_id', self.instance['uuid'])
         self.assertEqual(bdm['volume_id'], 'fake_id')
-        self.assertEqual(bdm['instance']['uuid'], self.instance['uuid'])
+        self.assertEqual(bdm['instance_uuid'], self.instance['uuid'])
+
+    def test_block_device_mapping_get_by_instance_and_volume_id_multiplebdms(
+            self):
+        self._create_bdm({'volume_id': 'fake_id',
+                          'instance_uuid': self.instance['uuid']})
+        self._create_bdm({'volume_id': 'fake_id',
+                          'instance_uuid': self.instance['uuid']})
+        db_bdm = db.block_device_mapping_get_by_instance_and_volume_id(
+            self.ctxt, 'fake_id', self.instance['uuid'])
+        self.assertIsNotNone(db_bdm)
+        self.assertEqual(self.instance['uuid'], db_bdm['instance_uuid'])
+
+    def test_block_device_mapping_get_by_instance_and_volume_id_multiattach(
+            self):
+        self.instance2 = db.instance_create(self.ctxt, {})
+        self._create_bdm({'volume_id': 'fake_id',
+                          'instance_uuid': self.instance['uuid']})
+        self._create_bdm({'volume_id': 'fake_id',
+                          'instance_uuid': self.instance2['uuid']})
+        bdm = db.block_device_mapping_get_by_instance_and_volume_id(self.ctxt,
+                'fake_id', self.instance['uuid'])
+        self.assertEqual(bdm['volume_id'], 'fake_id')
+        self.assertEqual(bdm['instance_uuid'], self.instance['uuid'])
+
+        bdm2 = db.block_device_mapping_get_by_instance_and_volume_id(
+                self.ctxt, 'fake_id', self.instance2['uuid'])
+        self.assertEqual(bdm2['volume_id'], 'fake_id')
+        self.assertEqual(bdm2['instance_uuid'], self.instance2['uuid'])
 
 
 class AgentBuildTestCase(test.TestCase, ModelsObjectComparatorMixin):

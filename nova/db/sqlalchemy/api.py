@@ -4027,11 +4027,22 @@ def block_device_mapping_get_all_by_instance(context, instance_uuid,
 
 
 @require_context
-def block_device_mapping_get_by_volume_id(context, volume_id,
+def block_device_mapping_get_all_by_volume_id(context, volume_id,
         columns_to_join=None):
     return _block_device_mapping_get_query(context,
             columns_to_join=columns_to_join).\
                  filter_by(volume_id=volume_id).\
+                 all()
+
+
+@require_context
+def block_device_mapping_get_by_instance_and_volume_id(context, volume_id,
+                                                       instance_uuid,
+                                                       columns_to_join=None):
+    return _block_device_mapping_get_query(context,
+            columns_to_join=columns_to_join).\
+                 filter_by(volume_id=volume_id).\
+                 filter_by(instance_uuid=instance_uuid).\
                  first()
 
 
@@ -4554,7 +4565,9 @@ def migration_get_in_progress_by_host_and_node(context, host, node):
 def migration_get_all_by_filters(context, filters):
     query = model_query(context, models.Migration)
     if "status" in filters:
-        query = query.filter(models.Migration.status == filters["status"])
+        status = filters["status"]
+        status = [status] if isinstance(status, str) else status
+        query = query.filter(models.Migration.status.in_(status))
     if "host" in filters:
         host = filters["host"]
         query = query.filter(or_(models.Migration.source_compute == host,

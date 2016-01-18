@@ -68,6 +68,7 @@ from nova.network.security_group import openstack_driver
 from nova import objects
 from nova.objects import block_device as block_device_obj
 from nova.objects import instance as instance_obj
+from nova.objects import migrate_data as migrate_data_obj
 from nova import policy
 from nova import quota
 from nova.scheduler import client as scheduler_client
@@ -237,7 +238,7 @@ class BaseTestCase(test.TestCase):
         fake_taskapi = FakeComputeTaskAPI()
         self.stubs.Set(self.compute, 'compute_task_api', fake_taskapi)
 
-        fake_network.set_stub_network_methods(self.stubs)
+        fake_network.set_stub_network_methods(self)
         fake_server_actions.stub_out_action_events(self.stubs)
 
         def fake_get_nw_info(cls, ctxt, instance, *args, **kwargs):
@@ -248,7 +249,7 @@ class BaseTestCase(test.TestCase):
 
         def fake_allocate_for_instance(cls, ctxt, instance, *args, **kwargs):
             self.assertFalse(ctxt.is_admin)
-            return fake_network.fake_get_instance_nw_info(self.stubs, 1, 1)
+            return fake_network.fake_get_instance_nw_info(self, 1, 1)
 
         self.stubs.Set(network_api.API, 'allocate_for_instance',
                        fake_allocate_for_instance)
@@ -428,7 +429,7 @@ class ComputeVolumeTestCase(BaseTestCase):
             mock.patch.object(self.compute, '_driver_detach_volume'),
             mock.patch.object(self.compute.volume_api, 'detach'),
             mock.patch.object(objects.BlockDeviceMapping,
-                              'get_by_volume_id'),
+                              'get_by_volume_and_instance'),
             mock.patch.object(fake_bdm, 'destroy')
         ) as (mock_internal_detach, mock_detach, mock_get, mock_destroy):
             mock_detach.side_effect = test.TestingException
@@ -743,15 +744,15 @@ class ComputeVolumeTestCase(BaseTestCase):
                'volume_id': uuids.volume_id}
 
         self.mox.StubOutWithMock(objects.BlockDeviceMapping,
-                                 'get_by_volume_id')
+                                 'get_by_volume_and_instance')
         self.mox.StubOutWithMock(self.compute.driver, 'block_stats')
         self.mox.StubOutWithMock(self.compute, '_get_host_volume_bdms')
         self.mox.StubOutWithMock(self.compute.driver, 'get_all_volume_usage')
 
         # The following methods will be called
-        objects.BlockDeviceMapping.get_by_volume_id(self.context,
-                                                    uuids.volume_id).AndReturn(
-                                                    bdm.obj_clone())
+        objects.BlockDeviceMapping.get_by_volume_and_instance(
+            self.context, uuids.volume_id, instance.uuid).AndReturn(
+                                                              bdm.obj_clone())
         self.compute.driver.block_stats(instance, 'vdb').\
             AndReturn([1, 30, 1, 20, None])
         self.compute._get_host_volume_bdms(self.context,
@@ -1654,7 +1655,7 @@ class ComputeTestCase(BaseTestCase):
                       'IPv6 pretty-printing broken on OSX, see bug 1409135')
     def test_default_access_ip(self):
         self.flags(default_access_ip_network_name='test1')
-        fake_network.unset_stub_network_methods(self.stubs)
+        fake_network.unset_stub_network_methods(self)
         instance = self._create_fake_instance_obj()
 
         orig_update = self.compute._instance_update
@@ -2693,7 +2694,7 @@ class ComputeTestCase(BaseTestCase):
                                    task_states.REBOOT_STARTED_HARD))
 
         # This is a true unit test, so we don't need the network stubs.
-        fake_network.unset_stub_network_methods(self.stubs)
+        fake_network.unset_stub_network_methods(self)
 
         self.mox.StubOutWithMock(self.compute,
                                  '_get_instance_block_device_info')
@@ -3970,7 +3971,7 @@ class ComputeTestCase(BaseTestCase):
     def test_run_instance_queries_macs(self):
         # run_instance should ask the driver for node mac addresses and pass
         # that to the network_api in use.
-        fake_network.unset_stub_network_methods(self.stubs)
+        fake_network.unset_stub_network_methods(self)
         instance = self._create_fake_instance_obj()
 
         macs = set(['01:23:45:67:89:ab'])
@@ -3982,7 +3983,7 @@ class ComputeTestCase(BaseTestCase):
             requested_networks=None,
             vpn=False, macs=macs,
             security_groups=[], dhcp_options=None).AndReturn(
-                fake_network.fake_get_instance_nw_info(self.stubs, 1, 1))
+                fake_network.fake_get_instance_nw_info(self, 1, 1))
 
         self.mox.StubOutWithMock(self.compute.driver, "macs_for_instance")
         self.compute.driver.macs_for_instance(
@@ -4034,7 +4035,7 @@ class ComputeTestCase(BaseTestCase):
                 mox.IgnoreArg(),
                 requested_networks=None).MultipleTimes()
 
-        fake_network.unset_stub_network_methods(self.stubs)
+        fake_network.unset_stub_network_methods(self)
 
         self.mox.ReplayAll()
 
@@ -5466,14 +5467,14 @@ class ComputeTestCase(BaseTestCase):
     def test_pre_live_migration_works_correctly(self):
         # Confirm setup_compute_volume is called when volume is mounted.
         def stupid(*args, **kwargs):
-            return fake_network.fake_get_instance_nw_info(self.stubs)
+            return fake_network.fake_get_instance_nw_info(self)
         self.stubs.Set(self.compute.network_api,
                        'get_instance_nw_info', stupid)
 
         # creating instance testdata
         instance = self._create_fake_instance_obj({'host': 'dummy'})
         c = context.get_admin_context()
-        nw_info = fake_network.fake_get_instance_nw_info(self.stubs)
+        nw_info = fake_network.fake_get_instance_nw_info(self)
 
         # creating mocks
         self.mox.StubOutWithMock(self.compute.driver, 'pre_live_migration')
@@ -5625,11 +5626,13 @@ class ComputeTestCase(BaseTestCase):
 
         migration = objects.Migration()
 
-        ret = self.compute.live_migration(c, dest=dest,
-                                          instance=instance,
-                                          block_migration=False,
-                                          migration=migration,
-                                          migrate_data=migrate_data)
+        with mock.patch.object(self.compute, '_get_migrate_data_obj') as gmdo:
+            gmdo.return_value = migrate_data_obj.LiveMigrateData()
+            ret = self.compute.live_migration(c, dest=dest,
+                                              instance=instance,
+                                              block_migration=False,
+                                              migration=migration,
+                                              migrate_data=migrate_data)
 
         self.assertIsNone(ret)
         event_mock.assert_called_with(
@@ -5688,7 +5691,10 @@ class ComputeTestCase(BaseTestCase):
 
         # start test
         self.mox.ReplayAll()
-        migrate_data = {'is_shared_instance_path': False}
+        migrate_data = objects.LibvirtLiveMigrateData(
+            is_shared_instance_path=False,
+            is_shared_block_storage=False,
+            block_migration=False)
         self.compute._post_live_migration(c, instance, dest,
                                           migrate_data=migrate_data)
         self.assertIn('cleanup', result)
@@ -5711,7 +5717,9 @@ class ComputeTestCase(BaseTestCase):
                         'power_state': power_state.PAUSED})
         instance.save()
 
-        migrate_data = {'migration': mock.MagicMock()}
+        migration_obj = objects.Migration()
+        migrate_data = migrate_data_obj.LiveMigrateData(
+            migration=migration_obj)
 
         # creating mocks
         with test.nested(
@@ -5727,12 +5735,13 @@ class ComputeTestCase(BaseTestCase):
                               'setup_networks_on_host'),
             mock.patch.object(self.compute.instance_events,
                               'clear_events_for_instance'),
-            mock.patch.object(self.compute, 'update_available_resource')
+            mock.patch.object(self.compute, 'update_available_resource'),
+            mock.patch.object(migration_obj, 'save'),
         ) as (
             post_live_migration, unfilter_instance,
             migrate_instance_start, post_live_migration_at_destination,
             post_live_migration_at_source, setup_networks_on_host,
-            clear_events, update_available_resource
+            clear_events, update_available_resource, mig_save
         ):
             self.compute._post_live_migration(c, instance, dest,
                                               migrate_data=migrate_data)
@@ -5753,8 +5762,8 @@ class ComputeTestCase(BaseTestCase):
                 [mock.call(c, instance, [])])
             clear_events.assert_called_once_with(instance)
             update_available_resource.assert_has_calls([mock.call(c)])
-            self.assertEqual('completed', migrate_data['migration'].status)
-            migrate_data['migration'].save.assert_called_once_with()
+            self.assertEqual('completed', migration_obj.status)
+            mig_save.assert_called_once_with()
 
     def test_post_live_migration_terminate_volume_connections(self):
         c = context.get_admin_context()
@@ -6695,7 +6704,7 @@ class ComputeTestCase(BaseTestCase):
         self.compute._destroy_evacuated_instances(fake_context)
         mock_get.assert_called_once_with(fake_context,
                                          {'source_compute': self.compute.host,
-                                          'status': 'accepted',
+                                          'status': ['accepted', 'done'],
                                           'migration_type': 'evacuation'})
 
     @mock.patch('nova.objects.MigrationList.get_by_filters')
@@ -7420,7 +7429,7 @@ class ComputeAPITestCase(BaseTestCase):
     def setUp(self):
         def fake_get_nw_info(cls, ctxt, instance):
             self.assertTrue(ctxt.is_admin)
-            return fake_network.fake_get_instance_nw_info(self.stubs, 1, 1)
+            return fake_network.fake_get_instance_nw_info(self, 1, 1)
 
         super(ComputeAPITestCase, self).setUp()
         self.useFixture(fixtures.SpawnIsSynchronousFixture())
@@ -9452,7 +9461,8 @@ class ComputeAPITestCase(BaseTestCase):
 
         instance = objects.Instance(image_ref=uuids.image_instance,
                                     system_metadata={},
-                                    flavor=new_type)
+                                    flavor=new_type,
+                                    host='fake-host')
         self.mox.StubOutWithMock(self.compute.network_api,
                                  'allocate_port_for_instance')
         nwinfo = [fake_network_cache_model.new_vif()]
@@ -9460,7 +9470,8 @@ class ComputeAPITestCase(BaseTestCase):
         port_id = nwinfo[0]['id']
         req_ip = '1.2.3.4'
         self.compute.network_api.allocate_port_for_instance(
-            self.context, instance, port_id, network_id, req_ip
+            self.context, instance, port_id, network_id, req_ip,
+            bind_host_id='fake-host'
             ).AndReturn(nwinfo)
         self.mox.ReplayAll()
         vif = self.compute.attach_interface(self.context,
@@ -9478,7 +9489,8 @@ class ComputeAPITestCase(BaseTestCase):
                        uuid=uuids.interface_failed_instance,
                        image_ref='foo',
                        system_metadata={},
-                       flavor=new_type)
+                       flavor=new_type,
+                       host='fake-host')
         nwinfo = [fake_network_cache_model.new_vif()]
         network_id = nwinfo[0]['network']['id']
         port_id = nwinfo[0]['id']
@@ -9498,7 +9510,8 @@ class ComputeAPITestCase(BaseTestCase):
                               self.compute.attach_interface, self.context,
                               instance, network_id, port_id, req_ip)
             mock_allocate.assert_called_once_with(self.context, instance,
-                                                  network_id, port_id, req_ip)
+                                                  network_id, port_id, req_ip,
+                                                  bind_host_id='fake-host')
             mock_deallocate.assert_called_once_with(self.context, instance,
                                                     port_id)
 
@@ -9749,10 +9762,11 @@ class ComputeAPITestCase(BaseTestCase):
                        fake_libvirt_driver_detach_volume_fails)
 
         self.mox.StubOutWithMock(objects.BlockDeviceMapping,
-                                 'get_by_volume_id')
-        objects.BlockDeviceMapping.get_by_volume_id(
-                self.context, 1).AndReturn(objects.BlockDeviceMapping(
-                    context=self.context, **fake_bdm))
+                                 'get_by_volume_and_instance')
+        objects.BlockDeviceMapping.get_by_volume_and_instance(
+                self.context, 1, instance.uuid).\
+                    AndReturn(objects.BlockDeviceMapping(
+                        context=self.context, **fake_bdm))
         self.mox.ReplayAll()
 
         self.assertRaises(AttributeError, self.compute.detach_volume,
@@ -9775,7 +9789,7 @@ class ComputeAPITestCase(BaseTestCase):
             mock.patch.object(self.compute.driver, 'detach_volume',
                               side_effect=exception.DiskNotFound('sdb')),
             mock.patch.object(objects.BlockDeviceMapping,
-                              'get_by_volume_id', return_value=bdm),
+                              'get_by_volume_and_instance', return_value=bdm),
             mock.patch.object(cinder.API, 'terminate_connection'),
             mock.patch.object(bdm, 'destroy'),
             mock.patch.object(self.compute, '_notify_about_instance_usage'),
@@ -10957,7 +10971,7 @@ class ComputePolicyTestCase(BaseTestCase):
 
         self.assertRaises(exception.PolicyNotAuthorized,
                           self.compute_api.create, self.context, None, '1',
-                          availability_zone='1:1')
+                          availability_zone='1', forced_host='1')
 
     def test_force_host_pass(self):
         rules = {"compute:create": [],
@@ -10967,7 +10981,7 @@ class ComputePolicyTestCase(BaseTestCase):
 
         self.compute_api.create(self.context, None,
                                 image_href=uuids.host_instance,
-                                availability_zone='1:1')
+                                availability_zone='1', forced_host='1')
 
 
 class DisabledInstanceTypesTestCase(BaseTestCase):

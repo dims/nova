@@ -826,7 +826,7 @@ class ComputeManager(manager.Manager):
         """
         filters = {
             'source_compute': self.host,
-            'status': 'accepted',
+            'status': ['accepted', 'done'],
             'migration_type': 'evacuation',
         }
         evacuations = objects.MigrationList.get_by_filters(context, filters)
@@ -1560,6 +1560,7 @@ class ComputeManager(manager.Manager):
             retries = 0
         attempts = retries + 1
         retry_time = 1
+        bind_host_id = self.driver.network_binding_host_id(context, instance)
         for attempt in range(1, attempts + 1):
             try:
                 nwinfo = self.network_api.allocate_for_instance(
@@ -1567,7 +1568,8 @@ class ComputeManager(manager.Manager):
                         requested_networks=requested_networks,
                         macs=macs,
                         security_groups=security_groups,
-                        dhcp_options=dhcp_options)
+                        dhcp_options=dhcp_options,
+                        bind_host_id=bind_host_id)
                 LOG.debug('Instance network_info: |%s|', nwinfo,
                           instance=instance)
                 instance.system_metadata['network_allocated'] = 'True'
@@ -2068,7 +2070,8 @@ class ComputeManager(manager.Manager):
         except (exception.FlavorDiskTooSmall,
                 exception.FlavorMemoryTooSmall,
                 exception.ImageNotActive,
-                exception.ImageUnacceptable) as e:
+                exception.ImageUnacceptable,
+                exception.InvalidDiskInfo) as e:
             self._notify_about_instance_usage(context, instance,
                     'create.error', fault=e)
             raise exception.BuildAbortException(instance_uuid=instance.uuid,
@@ -4635,7 +4638,7 @@ class ComputeManager(manager.Manager):
                     context=context,
                     source_type='volume', destination_type='volume',
                     instance_uuid=instance.uuid, boot_index=None,
-                    volume_id=volume_id or 'reserved',
+                    volume_id=volume_id,
                     device_name=device, guest_format=None,
                     disk_bus=disk_bus, device_type=device_type)
 
@@ -4737,8 +4740,8 @@ class ComputeManager(manager.Manager):
 
         """
 
-        bdm = objects.BlockDeviceMapping.get_by_volume_id(
-                context, volume_id)
+        bdm = objects.BlockDeviceMapping.get_by_volume_and_instance(
+                context, volume_id, instance.uuid)
         if CONF.volume_usage_poll_interval > 0:
             vol_stats = []
             mp = bdm.device_name
@@ -4866,8 +4869,8 @@ class ComputeManager(manager.Manager):
         """Swap volume for an instance."""
         context = context.elevated()
 
-        bdm = objects.BlockDeviceMapping.get_by_volume_id(
-                context, old_volume_id, instance_uuid=instance.uuid)
+        bdm = objects.BlockDeviceMapping.get_by_volume_and_instance(
+                context, old_volume_id, instance.uuid)
         connector = self.driver.get_volume_connector(instance)
 
         resize_to = 0
@@ -4916,8 +4919,8 @@ class ComputeManager(manager.Manager):
         #             connection from this host.
 
         try:
-            bdm = objects.BlockDeviceMapping.get_by_volume_id(
-                    context, volume_id)
+            bdm = objects.BlockDeviceMapping.get_by_volume_and_instance(
+                    context, volume_id, instance.uuid)
             self._driver_detach_volume(context, instance, bdm)
             connector = self.driver.get_volume_connector(instance)
             self.volume_api.terminate_connection(context, volume_id, connector)
@@ -4929,8 +4932,10 @@ class ComputeManager(manager.Manager):
     def attach_interface(self, context, instance, network_id, port_id,
                          requested_ip):
         """Use hotplug to add an network adapter to an instance."""
+        bind_host_id = self.driver.network_binding_host_id(context, instance)
         network_info = self.network_api.allocate_port_for_instance(
-            context, instance, port_id, network_id, requested_ip)
+            context, instance, port_id, network_id, requested_ip,
+            bind_host_id=bind_host_id)
         if len(network_info) != 1:
             LOG.error(_LE('allocate_port_for_instance returned %(ports)s '
                           'ports'), {'ports': len(network_info)})
@@ -5109,7 +5114,10 @@ class ComputeManager(manager.Manager):
                                        migrate_data)
         if isinstance(pre_live_migration_data,
                       migrate_data_obj.LiveMigrateData):
-            pre_live_migration_data = pre_live_migration_data.to_legacy_dict()
+            pre_live_migration_data = pre_live_migration_data.to_legacy_dict(
+                pre_migration_result=True)
+            pre_live_migration_data = pre_live_migration_data[
+                'pre_live_migration_result']
 
         # NOTE(tr3buchet): setup networks on destination host
         self.network_api.setup_networks_on_host(context, instance,
@@ -5129,6 +5137,21 @@ class ComputeManager(manager.Manager):
                      network_info=network_info)
 
         return pre_live_migration_data
+
+    def _get_migrate_data_obj(self):
+        # FIXME(danms): A couple patches from now, we'll be able to
+        # avoid this failure _if_ we get a new-style call with the
+        # object.
+        if CONF.compute_driver.startswith('libvirt'):
+            return objects.LibvirtLiveMigrateData()
+        elif CONF.compute_driver.startswith('xenapi'):
+            return objects.XenapiLiveMigrateData()
+        else:
+            LOG.error(_('Older RPC caller and unsupported virt driver in '
+                        'use. Unable to handle this!'))
+            raise exception.MigrationError(
+                _('Unknown compute driver while providing compatibility '
+                  'with older RPC formats'))
 
     def _do_live_migration(self, context, dest, instance, block_migration,
                            migration, migrate_data):
@@ -5153,7 +5176,8 @@ class ComputeManager(manager.Manager):
                 context, instance,
                 block_migration, disk, dest, migrate_data)
             migrate_data['pre_live_migration_result'] = pre_migration_data
-
+            migrate_data_obj = self._get_migrate_data_obj()
+            migrate_data_obj.from_legacy_dict(migrate_data)
         except Exception:
             with excutils.save_and_reraise_exception():
                 LOG.exception(_LE('Pre live migration failed at %s'),
@@ -5164,12 +5188,12 @@ class ComputeManager(manager.Manager):
 
         self._set_migration_status(migration, 'running')
 
-        migrate_data['migration'] = migration
+        migrate_data_obj.migration = migration
         try:
             self.driver.live_migration(context, instance, dest,
                                        self._post_live_migration,
                                        self._rollback_live_migration,
-                                       block_migration, migrate_data)
+                                       block_migration, migrate_data_obj)
         except Exception:
             # Executing live migration
             # live_migration might raises exceptions, but
@@ -5226,11 +5250,9 @@ class ComputeManager(manager.Manager):
         #                 block storage or instance path were shared
         is_shared_block_storage = not block_migration
         is_shared_instance_path = not block_migration
-        if migrate_data:
-            is_shared_block_storage = migrate_data.get(
-                    'is_shared_block_storage', is_shared_block_storage)
-            is_shared_instance_path = migrate_data.get(
-                    'is_shared_instance_path', is_shared_instance_path)
+        if isinstance(migrate_data, objects.LibvirtLiveMigrateData):
+            is_shared_block_storage = migrate_data.is_shared_block_storage
+            is_shared_instance_path = migrate_data.is_shared_instance_path
 
         # No instance booting at source host, but instance dir
         # must be deleted for preparing next block migration
@@ -5347,9 +5369,9 @@ class ComputeManager(manager.Manager):
                  instance=instance)
 
         self._clean_instance_console_tokens(ctxt, instance)
-        if migrate_data and migrate_data.get('migration'):
-            migrate_data['migration'].status = 'completed'
-            migrate_data['migration'].save()
+        if migrate_data and migrate_data.obj_attr_is_set('migration'):
+            migrate_data.migration.status = 'completed'
+            migrate_data.migration.save()
 
     def _consoles_enabled(self):
         """Returns whether a console is enable."""
@@ -5450,8 +5472,10 @@ class ComputeManager(manager.Manager):
 
         # NOTE(danms): Pop out the migration object so we don't pass
         # it over RPC unintentionally below
-        if migrate_data:
+        if isinstance(migrate_data, dict):
             migration = migrate_data.pop('migration', None)
+        elif isinstance(migrate_data, migrate_data_obj.LiveMigrateData):
+            migration = migrate_data.migration
         else:
             migration = None
 
@@ -5472,6 +5496,8 @@ class ComputeManager(manager.Manager):
                 block_migration, migrate_data)
 
         if do_cleanup:
+            if isinstance(migrate_data, migrate_data_obj.LiveMigrateData):
+                migrate_data = migrate_data.to_legacy_dict()
             self.compute_rpcapi.rollback_live_migration_at_destination(
                     context, instance, dest, destroy_disks=destroy_disks,
                     migrate_data=migrate_data)

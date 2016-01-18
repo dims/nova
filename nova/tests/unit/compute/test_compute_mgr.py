@@ -290,7 +290,9 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
                 self.context, instance, vpn=is_vpn,
                 requested_networks=req_networks, macs=macs,
                 security_groups=sec_groups,
-                dhcp_options=dhcp_options).AndRaise(test.TestingException())
+                dhcp_options=dhcp_options,
+                bind_host_id=instance.get('host')).AndRaise(
+                    test.TestingException())
 
         self.mox.ReplayAll()
 
@@ -317,7 +319,9 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
                 self.context, instance, vpn=is_vpn,
                 requested_networks=req_networks, macs=macs,
                 security_groups=sec_groups,
-                dhcp_options=dhcp_options).AndRaise(test.TestingException())
+                dhcp_options=dhcp_options,
+                bind_host_id=instance.get('host')).AndRaise(
+                    test.TestingException())
 
         self.mox.ReplayAll()
 
@@ -1718,8 +1722,9 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
                        fake_vol_unreserve)
         self.stubs.Set(self.compute.volume_api, 'terminate_connection',
                        fake_vol_api_func)
-        self.stubs.Set(db, 'block_device_mapping_get_by_volume_id',
-                       lambda x, y, z: fake_bdm)
+        self.stubs.Set(db,
+                       'block_device_mapping_get_by_instance_and_volume_id',
+                       lambda x, y, z, v: fake_bdm)
         self.stubs.Set(self.compute.driver, 'get_volume_connector',
                        lambda x: {})
         self.stubs.Set(self.compute.driver, 'swap_volume',
@@ -2169,18 +2174,20 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
             self.assertFalse(allow_reboot)
             self.assertEqual(reboot_type, 'HARD')
 
-    @mock.patch('nova.objects.BlockDeviceMapping.get_by_volume_id')
+    @mock.patch('nova.objects.BlockDeviceMapping.get_by_volume_and_instance')
     @mock.patch('nova.compute.manager.ComputeManager._driver_detach_volume')
     @mock.patch('nova.objects.Instance._from_db_object')
     def test_remove_volume_connection(self, inst_from_db, detach, bdm_get):
         bdm = mock.sentinel.bdm
-        inst_obj = mock.sentinel.inst_obj
+        inst_obj = mock.Mock()
+        inst_obj.uuid = 'uuid'
         bdm_get.return_value = bdm
         inst_from_db.return_value = inst_obj
         with mock.patch.object(self.compute, 'volume_api'):
             self.compute.remove_volume_connection(self.context, 'vol',
                                                   inst_obj)
         detach.assert_called_once_with(self.context, inst_obj, bdm)
+        bdm_get.assert_called_once_with(self.context, 'vol', 'uuid')
 
     def test_detach_volume(self):
         self._test_detach_volume()
@@ -2188,14 +2195,15 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
     def test_detach_volume_not_destroy_bdm(self):
         self._test_detach_volume(destroy_bdm=False)
 
-    @mock.patch('nova.objects.BlockDeviceMapping.get_by_volume_id')
+    @mock.patch('nova.objects.BlockDeviceMapping.get_by_volume_and_instance')
     @mock.patch('nova.compute.manager.ComputeManager._driver_detach_volume')
     @mock.patch('nova.compute.manager.ComputeManager.'
                 '_notify_about_instance_usage')
     def _test_detach_volume(self, notify_inst_usage, detach,
                             bdm_get, destroy_bdm=True):
         volume_id = '123'
-        inst_obj = mock.sentinel.inst_obj
+        inst_obj = mock.Mock()
+        inst_obj.uuid = 'uuid'
 
         bdm = mock.MagicMock(spec=objects.BlockDeviceMapping)
         bdm.device_name = 'vdb'
@@ -2470,6 +2478,8 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase):
 
         # Only instance 2 has a migration record
         migration = objects.Migration(instance_uuid=instance_2.uuid)
+        # Consider the migration successful
+        migration.status = 'done'
 
         with test.nested(
             mock.patch.object(self.compute, '_get_instances_on_driver',
@@ -3517,6 +3527,10 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
             exception.ImageUnacceptable(image_id=self.image.get('id'),
                                         reason=""))
 
+    def test_build_and_run_invalid_disk_info_exception(self):
+        self._test_build_and_run_spawn_exceptions(
+            exception.InvalidDiskInfo(reason=""))
+
     def _test_build_and_run_spawn_exceptions(self, exc):
         with test.nested(
                 mock.patch.object(self.compute.driver, 'spawn',
@@ -3961,8 +3975,7 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
                 return_value=({}, instance))
         @mock.patch.object(self.compute.driver, 'spawn')
         @mock.patch.object(self.compute, '_build_networks_for_instance',
-                return_value=fake_network.fake_get_instance_nw_info(
-                    self.stubs))
+                return_value=fake_network.fake_get_instance_nw_info(self))
         @mock.patch.object(db, 'instance_extra_update_by_uuid')
         @mock.patch.object(self.compute, '_notify_about_instance_usage')
         def _check_access_ip(mock_notify, mock_extra, mock_networks,

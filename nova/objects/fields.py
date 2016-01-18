@@ -223,6 +223,18 @@ class DiskBus(Enum):
             valid_values=DiskBus.ALL)
 
 
+class FirmwareType(Enum):
+
+    UEFI = "uefi"
+    BIOS = "bios"
+
+    ALL = (UEFI, BIOS)
+
+    def __init__(self):
+        super(FirmwareType, self).__init__(
+            valid_values=FirmwareType.ALL)
+
+
 class HVType(Enum):
     # TODO(berrange): move all constants out of 'nova.compute.hv_type'
     # into fields on this class
@@ -406,6 +418,20 @@ class MonitorMetricType(Enum):
     def __init__(self):
         super(MonitorMetricType, self).__init__(
             valid_values=MonitorMetricType.ALL)
+
+
+class HostStatus(Enum):
+
+    UP = "UP"  # The nova-compute is up.
+    DOWN = "DOWN"  # The nova-compute is forced_down.
+    MAINTENANCE = "MAINTENANCE"  # The nova-compute is disabled.
+    UNKNOWN = "UNKNOWN"  # The nova-compute has not reported.
+
+    ALL = (UP, DOWN, MAINTENANCE, UNKNOWN)
+
+    def __init__(self):
+        super(HostStatus, self).__init__(
+            valid_values=HostStatus.ALL)
 
 
 class PciDeviceStatus(Enum):
@@ -638,6 +664,10 @@ class CPUFeaturePolicyField(BaseEnumField):
 
 class DiskBusField(BaseEnumField):
     AUTO_TYPE = DiskBus()
+
+
+class FirmwareTypeField(BaseEnumField):
+    AUTO_TYPE = FirmwareType()
 
 
 class HVTypeField(BaseEnumField):

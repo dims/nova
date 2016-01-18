@@ -170,6 +170,23 @@ def get_client(context, admin=False):
                             region_name=CONF.neutron.region_name)
 
 
+def _is_not_duplicate(item, items, items_list_name, instance):
+    present = item in items
+
+    # The expectation from this function's perspective is that the
+    # item is not part of the items list so if it is part of it
+    # we should at least log it as a warning
+    if present:
+        LOG.warning(_LW("%(item)s already exists in list: %(list_name)s "
+                        "containing: %(items)s. ignoring it"),
+                    {'item': item,
+                     'list_name': items_list_name,
+                     'items': items},
+                    instance=instance)
+
+    return not present
+
+
 class API(base_api.NetworkAPI):
     """API for interacting with the neutron 2.x API."""
 
@@ -523,6 +540,7 @@ class API(base_api.NetworkAPI):
             configured with the baremetal hypervisor. It is expected that these
             are already formatted for the neutron v2 api.
             See nova/virt/driver.py:dhcp_options_for_instance for an example.
+        :param bind_host_id: the host ID to attach to the ports being created.
         """
         hypervisor_macs = kwargs.get('macs', None)
 
@@ -546,6 +564,7 @@ class API(base_api.NetworkAPI):
                 reason=msg % instance.uuid)
         requested_networks = kwargs.get('requested_networks')
         dhcp_opts = kwargs.get('dhcp_options', None)
+        bind_host_id = kwargs.get('bind_host_id')
         ports, net_ids, ordered_networks, available_macs = (
             self._process_requested_networks(context,
                 instance, neutron, requested_networks, hypervisor_macs))
@@ -621,11 +640,9 @@ class API(base_api.NetworkAPI):
             port_req_body = {'port': {'device_id': instance.uuid,
                                       'device_owner': zone}}
             try:
-                self._populate_neutron_extension_values(context,
-                                                        instance,
-                                                        request.pci_request_id,
-                                                        port_req_body,
-                                                        neutron=neutron)
+                self._populate_neutron_extension_values(
+                    context, instance, request.pci_request_id, port_req_body,
+                    neutron=neutron, bind_host_id=bind_host_id)
                 if request.port_id:
                     port = ports[request.port_id]
                     port_client.update_port(port['id'], port_req_body)
@@ -698,7 +715,7 @@ class API(base_api.NetworkAPI):
 
     def _populate_neutron_extension_values(self, context, instance,
                                            pci_request_id, port_req_body,
-                                           neutron=None):
+                                           neutron=None, bind_host_id=None):
         """Populate neutron extension values for the instance.
 
         If the extensions loaded contain QOS_QUEUE then pass the rxtx_factor.
@@ -709,7 +726,7 @@ class API(base_api.NetworkAPI):
             rxtx_factor = flavor.get('rxtx_factor')
             port_req_body['port']['rxtx_factor'] = rxtx_factor
         if self._has_port_binding_extension(context, neutron=neutron):
-            port_req_body['port']['binding:host_id'] = instance.get('host')
+            port_req_body['port']['binding:host_id'] = bind_host_id
             self._populate_neutron_binding_profile(instance,
                                                    pci_request_id,
                                                    port_req_body)
@@ -765,7 +782,8 @@ class API(base_api.NetworkAPI):
                                             network_model.NetworkInfo([]))
 
     def allocate_port_for_instance(self, context, instance, port_id,
-                                   network_id=None, requested_ip=None):
+                                   network_id=None, requested_ip=None,
+                                   bind_host_id=None):
         """Allocate a port for the instance."""
         requested_networks = objects.NetworkRequestList(
             objects=[objects.NetworkRequest(network_id=network_id,
@@ -773,7 +791,8 @@ class API(base_api.NetworkAPI):
                                             port_id=port_id,
                                             pci_request_id=None)])
         return self.allocate_for_instance(context, instance,
-                requested_networks=requested_networks)
+                requested_networks=requested_networks,
+                bind_host_id=bind_host_id)
 
     def deallocate_port_for_instance(self, context, instance, port_id):
         """Remove a specified port from the instance.
@@ -873,16 +892,32 @@ class API(base_api.NetworkAPI):
                                                     net_ids)
         # an interface was added/removed from instance.
         else:
-            # Since networks does not contain the existing networks on the
-            # instance we use their values from the cache and add it.
+
+            # Prepare the network ids list for validation purposes
+            networks_ids = [network['id'] for network in networks]
+
+            # Validate that interface networks doesn't exist in networks.
+            # Though this issue can and should be solved in methods
+            # that prepare the networks list, this method should have this
+            # ignore-duplicate-networks/port-ids mechanism to reduce the
+            # probability of failing to boot the VM.
             networks = networks + [
                 {'id': iface['network']['id'],
                  'name': iface['network']['label'],
                  'tenant_id': iface['network']['meta']['tenant_id']}
-                for iface in ifaces]
+                for iface in ifaces
+                if _is_not_duplicate(iface['network']['id'],
+                                     networks_ids,
+                                     "networks",
+                                     instance)]
 
             # Include existing interfaces so they are not removed from the db.
-            port_ids = [iface['id'] for iface in ifaces] + port_ids
+            # Validate that the interface id is not in the port_ids
+            port_ids = [iface['id'] for iface in ifaces
+                        if _is_not_duplicate(iface['id'],
+                                             port_ids,
+                                             "port_ids",
+                                             instance)] + port_ids
 
         return networks, port_ids
 
