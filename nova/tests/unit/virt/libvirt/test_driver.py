@@ -2632,6 +2632,56 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         self.assertIsInstance(cfg.devices[2],
                               vconfig.LibvirtConfigGuestConsole)
 
+    def test_has_uefi_support_with_invalid_version(self):
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
+        with mock.patch.object(drvr._host,
+                               'has_min_version', return_value=False):
+            self.assertFalse(drvr._has_uefi_support())
+
+    def test_has_uefi_support_not_supported_arch(self):
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
+        caps = vconfig.LibvirtConfigCaps()
+        caps.host = vconfig.LibvirtConfigCapsHost()
+        caps.host.cpu = vconfig.LibvirtConfigCPU()
+        caps.host.cpu.arch = "alpha"
+        self.assertFalse(drvr._has_uefi_support())
+
+    @mock.patch('os.path.exists', return_value=False)
+    def test_has_uefi_support_with_no_loader_existed(self, mock_exist):
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
+        self.assertFalse(drvr._has_uefi_support())
+
+    @mock.patch('os.path.exists', return_value=True)
+    def test_has_uefi_support(self, mock_has_version):
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
+
+        caps = vconfig.LibvirtConfigCaps()
+        caps.host = vconfig.LibvirtConfigCapsHost()
+        caps.host.cpu = vconfig.LibvirtConfigCPU()
+        caps.host.cpu.arch = "x86_64"
+
+        with mock.patch.object(drvr._host,
+                               'has_min_version', return_value=True):
+            self.assertTrue(drvr._has_uefi_support())
+
+    def test_get_guest_config_with_uefi(self):
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
+
+        image_meta = objects.ImageMeta.from_dict({
+            "disk_format": "raw",
+            "properties": {"hw_firmware_type": "uefi"}})
+        instance_ref = objects.Instance(**self.test_instance)
+
+        disk_info = blockinfo.get_disk_info(CONF.libvirt.virt_type,
+                                            instance_ref,
+                                            image_meta)
+        with test.nested(
+                mock.patch.object(drvr, "_has_uefi_support",
+                                  return_value=True)):
+            cfg = drvr._get_guest_config(instance_ref, [],
+                                         image_meta, disk_info)
+            self.assertEqual(cfg.os_loader_type, "pflash")
+
     def test_get_guest_config_with_block_device(self):
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
 
@@ -5144,9 +5194,11 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         with mock.patch.object(FakeVirtDomain, "fsFreeze") as mock_fsfreeze:
             drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI())
             instance = objects.Instance(**self.test_instance)
-            img_meta = {"properties": {"hw_qemu_guest_agent": "yes",
-                                       "os_require_quiesce": "yes"}}
-            self.assertIsNone(drvr.quiesce(self.context, instance, img_meta))
+            image_meta = objects.ImageMeta.from_dict(
+                {"properties": {"hw_qemu_guest_agent": "yes",
+                                "os_require_quiesce": "yes"}})
+            self.assertIsNone(drvr.quiesce(self.context, instance,
+                                           image_meta))
             mock_fsfreeze.assert_called_once_with()
 
     def test_quiesce_not_supported(self):
@@ -5163,9 +5215,11 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         with mock.patch.object(FakeVirtDomain, "fsThaw") as mock_fsthaw:
             drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI())
             instance = objects.Instance(**self.test_instance)
-            img_meta = {"properties": {"hw_qemu_guest_agent": "yes",
-                                       "os_require_quiesce": "yes"}}
-            self.assertIsNone(drvr.unquiesce(self.context, instance, img_meta))
+            image_meta = objects.ImageMeta.from_dict(
+                {"properties": {"hw_qemu_guest_agent": "yes",
+                                "os_require_quiesce": "yes"}})
+            self.assertIsNone(drvr.unquiesce(self.context, instance,
+                                             image_meta))
             mock_fsthaw.assert_called_once_with()
 
     def test_create_snapshot_metadata(self):
@@ -8245,7 +8299,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         instance_ref = self.test_instance
         instance_ref['image_ref'] = 123456  # we send an int to test sha1 call
         instance = objects.Instance(**instance_ref)
-        image_meta = self.test_image_meta
+        image_meta = objects.ImageMeta.from_dict(self.test_image_meta)
 
         # Mock out the get_info method of the LibvirtDriver so that the polling
         # in the spawn method of the LibvirtDriver returns immediately
@@ -8305,12 +8359,14 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         self.stubs.Set(drvr, '_create_domain_and_network', fake_none)
         self.stubs.Set(drvr, 'get_info', fake_get_info)
 
+        image_meta = objects.ImageMeta.from_dict(self.test_image_meta)
+
         drvr.spawn(self.context, instance,
-                   self.test_image_meta, [], None)
+                   image_meta, [], None)
         self.assertTrue(self.create_image_called)
 
         drvr.spawn(self.context, instance,
-                   self.test_image_meta, [], None)
+                   image_meta, [], None)
         self.assertTrue(self.create_image_called)
 
     def test_spawn_from_volume_calls_cache(self):
@@ -8339,6 +8395,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
                                  'boot_index': 0}
                                 ]
                             }
+        image_meta = objects.ImageMeta.from_dict(self.test_image_meta)
 
         # Volume-backed instance created without image
         instance_ref = self.test_instance
@@ -8348,7 +8405,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         instance = objects.Instance(**instance_ref)
 
         drvr.spawn(self.context, instance,
-                   self.test_image_meta, [], None,
+                   image_meta, [], None,
                    block_device_info=block_device_info)
         self.assertFalse(self.cache_called_for_disk)
 
@@ -8360,7 +8417,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         instance = objects.Instance(**instance_ref)
 
         drvr.spawn(self.context, instance,
-                   self.test_image_meta, [], None,
+                   image_meta, [], None,
                    block_device_info=block_device_info)
         self.assertFalse(self.cache_called_for_disk)
 
@@ -8369,7 +8426,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         instance_ref['uuid'] = uuidutils.generate_uuid()
         instance = objects.Instance(**instance_ref)
         drvr.spawn(self.context, instance,
-                   self.test_image_meta, [], None)
+                   image_meta, [], None)
         self.assertTrue(self.cache_called_for_disk)
 
     def test_start_lxc_from_volume(self):
@@ -8437,7 +8494,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         instance_ref['ephemeral_gb'] = 0
         instance_ref['uuid'] = uuidutils.generate_uuid()
         inst_obj = objects.Instance(**instance_ref)
-        image_meta = {}
+        image_meta = objects.ImageMeta.from_dict({})
 
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         with test.nested(
@@ -8503,8 +8560,10 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         instance['pci_devices'] = objects.PciDeviceList(
             objects=[objects.PciDevice(address='0000:00:00.0')])
 
+        image_meta = objects.ImageMeta.from_dict(self.test_image_meta)
+
         drvr.spawn(self.context, instance,
-                   self.test_image_meta, [], None)
+                   image_meta, [], None)
 
     def test_chown_disk_config_for_instance(self):
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
@@ -11779,9 +11838,8 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         network_info = _fake_network_info(self, 1)
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
 
-        fake_image_meta = {'id': instance['image_ref']}
-        fake_image_meta_obj = objects.ImageMeta.from_dict(
-            fake_image_meta)
+        fake_image_meta = objects.ImageMeta.from_dict(
+            {'id': instance['image_ref']})
 
         if method_name == "attach_interface":
             self.mox.StubOutWithMock(drvr.firewall_driver,
@@ -11789,7 +11847,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             drvr.firewall_driver.setup_basic_filtering(instance, network_info)
 
         expected = drvr.vif_driver.get_config(instance, network_info[0],
-                                              fake_image_meta_obj,
+                                              fake_image_meta,
                                               instance.get_flavor(),
                                               CONF.libvirt.virt_type,
                                               drvr._host)
@@ -11828,7 +11886,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
 
     def test_default_root_device_name(self):
         instance = {'uuid': 'fake_instance'}
-        image_meta = {'id': 'fake'}
+        image_meta = objects.ImageMeta.from_dict({'id': 'fake'})
         root_bdm = {'source_type': 'image',
                     'detination_type': 'volume',
                     'image_id': 'fake_id'}
@@ -11839,16 +11897,16 @@ class LibvirtConnTestCase(test.NoDBTestCase):
 
         blockinfo.get_disk_bus_for_device_type(instance,
                                                'fake_libvirt_type',
-                                               mox.IsA(objects.ImageMeta),
+                                               image_meta,
                                                'disk').InAnyOrder().\
                                                 AndReturn('virtio')
         blockinfo.get_disk_bus_for_device_type(instance,
                                                'fake_libvirt_type',
-                                               mox.IsA(objects.ImageMeta),
+                                               image_meta,
                                                'cdrom').InAnyOrder().\
                                                 AndReturn('ide')
         blockinfo.get_root_info(instance, 'fake_libvirt_type',
-                                mox.IsA(objects.ImageMeta), root_bdm,
+                                image_meta, root_bdm,
                                 'virtio', 'ide').AndReturn({'dev': 'vda'})
         self.mox.ReplayAll()
 
@@ -11982,7 +12040,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
                         image_meta=None, rescue=None,
                         block_device_info=None, write_to_disk=False):
             if image_meta is None:
-                image_meta = {}
+                image_meta = objects.ImageMeta.from_dict({})
             conf = drvr._get_guest_config(instance, network_info, image_meta,
                                           disk_info, rescue, block_device_info)
             self.resultXML = conf.to_xml()
@@ -13509,9 +13567,10 @@ class LibvirtDriverTestCase(test.NoDBTestCase):
         migration.dest_compute = 'fake-dest-compute'
         migration.source_node = 'fake-source-node'
         migration.dest_node = 'fake-dest-node'
+        image_meta = objects.ImageMeta.from_dict(self.test_image_meta)
         self.drvr.finish_migration(
                       context.get_admin_context(), migration, ins_ref,
-                      self._disk_info(), [], self.test_image_meta,
+                      self._disk_info(), [], image_meta,
                       resize_instance, None, power_on)
         self.assertTrue(self.fake_create_domain_called)
         self.assertEqual(
@@ -13938,12 +13997,11 @@ class LibvirtDriverTestCase(test.NoDBTestCase):
             self.drvr.firewall_driver.setup_basic_filtering(
                 instance, [network_info[0]])
 
-        fake_image_meta = {'id': instance.image_ref}
-        fake_image_meta_obj = objects.ImageMeta.from_dict(
-            fake_image_meta)
+        fake_image_meta = objects.ImageMeta.from_dict(
+            {'id': instance.image_ref})
 
         expected = self.drvr.vif_driver.get_config(
-            instance, network_info[0], fake_image_meta_obj, instance.flavor,
+            instance, network_info[0], fake_image_meta, instance.flavor,
             CONF.libvirt.virt_type, self.drvr._host)
 
         self.mox.StubOutWithMock(self.drvr.vif_driver,
@@ -14050,10 +14108,11 @@ class LibvirtDriverTestCase(test.NoDBTestCase):
                                 project_id=mox.IgnoreArg(),
                                 size=None, user_id=mox.IgnoreArg())
 
-        image_meta = {'id': 'fake', 'name': 'fake'}
+        image_meta = objects.ImageMeta.from_dict(
+            {'id': 'fake', 'name': 'fake'})
         self.drvr._get_guest_xml(mox.IgnoreArg(), instance,
                                  network_info, mox.IgnoreArg(),
-                                 mox.IsA(objects.ImageMeta),
+                                 image_meta,
                                  rescue=mox.IgnoreArg(),
                                  write_to_disk=mox.IgnoreArg()
                              ).AndReturn(dummyxml)
@@ -14172,10 +14231,11 @@ class LibvirtDriverTestCase(test.NoDBTestCase):
                                             content=mox.IgnoreArg(),
                                             extra_md=mox.IgnoreArg(),
                                             network_info=mox.IgnoreArg())
-        image_meta = {'id': 'fake', 'name': 'fake'}
+        image_meta = objects.ImageMeta.from_dict(
+            {'id': 'fake', 'name': 'fake'})
         self.drvr._get_guest_xml(mox.IgnoreArg(), instance,
                                  network_info, mox.IgnoreArg(),
-                                 mox.IsA(objects.ImageMeta),
+                                 image_meta,
                                  rescue=mox.IgnoreArg(),
                                  write_to_disk=mox.IgnoreArg()
                                 ).AndReturn(dummyxml)

@@ -114,6 +114,8 @@ from nova.volume import encryptors
 
 libvirt = None
 
+uefi_logged = False
+
 LOG = logging.getLogger(__name__)
 
 # Downtime period in milliseconds
@@ -307,6 +309,11 @@ DEFAULT_FIREWALL_DRIVER = "%s.%s" % (
     libvirt_firewall.__name__,
     libvirt_firewall.IptablesFirewallDriver.__name__)
 
+DEFAULT_UEFI_LOADER_PATH = {
+    "x86_64": "/usr/share/OVMF/OVMF_CODE.fd",
+    "aarch64": "/usr/share/AAVMF/AAVMF_CODE.fd"
+}
+
 MAX_CONSOLE_BYTES = 100 * units.Ki
 
 # The libvirt driver will prefix any disable reason codes with this string.
@@ -421,6 +428,9 @@ BAD_LIBVIRT_CPU_POLICY_VERSIONS = [(1, 2, 10)]
 MIN_QEMU_NUMA_HUGEPAGE_VERSION = (2, 1, 0)
 # fsFreeze/fsThaw requirement
 MIN_LIBVIRT_FSFREEZE_VERSION = (1, 2, 5)
+
+# UEFI booting support
+MIN_LIBVIRT_UEFI_VERSION = (1, 2, 9)
 
 # Hyper-V paravirtualized time source
 MIN_LIBVIRT_HYPERV_TIMER_VERSION = (1, 2, 2)
@@ -1312,7 +1322,6 @@ class LibvirtDriver(driver.ComputeDriver):
         self._disconnect_volume(connection_info, disk_dev)
 
     def attach_interface(self, instance, image_meta, vif):
-        image_meta = objects.ImageMeta.from_dict(image_meta)
         guest = self._host.get_guest(instance)
 
         self.vif_driver.plug(instance, vif)
@@ -1592,12 +1601,10 @@ class LibvirtDriver(driver.ComputeDriver):
 
         The qemu-guest-agent must be setup to execute fsfreeze.
         """
-        image_meta = objects.ImageMeta.from_dict(image_meta)
         self._set_quiesced(context, instance, image_meta, True)
 
     def unquiesce(self, context, instance, image_meta):
         """Thaw the guest filesystems after snapshot."""
-        image_meta = objects.ImageMeta.from_dict(image_meta)
         self._set_quiesced(context, instance, image_meta, False)
 
     def _live_snapshot(self, context, instance, guest, disk_path, out_path,
@@ -2465,7 +2472,6 @@ class LibvirtDriver(driver.ComputeDriver):
 
         rescue_image_id = None
         if image_meta is not None:
-            image_meta = objects.ImageMeta.from_dict(image_meta)
             if image_meta.obj_attr_is_set("id"):
                 rescue_image_id = image_meta.id
 
@@ -2520,7 +2526,6 @@ class LibvirtDriver(driver.ComputeDriver):
     # for xenapi(tr3buchet)
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, network_info=None, block_device_info=None):
-        image_meta = objects.ImageMeta.from_dict(image_meta)
         disk_info = blockinfo.get_disk_info(CONF.libvirt.virt_type,
                                             instance,
                                             image_meta,
@@ -4119,6 +4124,14 @@ class LibvirtDriver(driver.ComputeDriver):
             return flavor
         return instance.flavor
 
+    def _has_uefi_support(self):
+        # This means that the host can support uefi booting for guests
+        supported_archs = [arch.X86_64, arch.AARCH64]
+        caps = self._host.get_capabilities()
+        return ((caps.host.cpu.arch in supported_archs) and
+                self._host.has_min_version(MIN_LIBVIRT_UEFI_VERSION) and
+                os.path.exists(DEFAULT_UEFI_LOADER_PATH[caps.host.cpu.arch]))
+
     def _configure_guest_by_virt_type(self, guest, virt_type, caps, instance,
                                       image_meta, flavor, root_device_name):
         if virt_type == "xen":
@@ -4128,6 +4141,20 @@ class LibvirtDriver(driver.ComputeDriver):
             if caps.host.cpu.arch in (arch.I686, arch.X86_64):
                 guest.sysinfo = self._get_guest_config_sysinfo(instance)
                 guest.os_smbios = vconfig.LibvirtConfigGuestSMBIOS()
+            hw_firmware_type = image_meta.properties.get('hw_firmware_type')
+            if hw_firmware_type == fields.FirmwareType.UEFI:
+                if self._has_uefi_support():
+                    global uefi_logged
+                    if not uefi_logged:
+                        LOG.warn(_LW("uefi support is without some kind of "
+                                     "functional testing and therefore "
+                                     "considered experimental."))
+                        uefi_logged = True
+                    guest.os_loader = DEFAULT_UEFI_LOADER_PATH[
+                        caps.host.cpu.arch]
+                    guest.os_loader_type = "pflash"
+                else:
+                    raise exception.UEFINotSupported()
             guest.os_mach_type = self._get_machine_type(image_meta, caps)
             if image_meta.properties.get('hw_boot_menu') is None:
                 guest.os_bootmenu = strutils.bool_from_string(
@@ -6971,8 +6998,6 @@ class LibvirtDriver(driver.ComputeDriver):
                          block_device_info=None, power_on=True):
         LOG.debug("Starting finish_migration", instance=instance)
 
-        image_meta = objects.ImageMeta.from_dict(image_meta)
-
         # resize disks. only "disk" and "disk.local" are necessary.
         disk_info = jsonutils.loads(disk_info)
         for info in disk_info:
@@ -7301,7 +7326,6 @@ class LibvirtDriver(driver.ComputeDriver):
         return False
 
     def default_root_device_name(self, instance, image_meta, root_bdm):
-        image_meta = objects.ImageMeta.from_dict(image_meta)
         disk_bus = blockinfo.get_disk_bus_for_device_type(
             instance, CONF.libvirt.virt_type, image_meta, "disk")
         cdrom_bus = blockinfo.get_disk_bus_for_device_type(

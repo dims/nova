@@ -426,8 +426,9 @@ class HostStatus(Enum):
     DOWN = "DOWN"  # The nova-compute is forced_down.
     MAINTENANCE = "MAINTENANCE"  # The nova-compute is disabled.
     UNKNOWN = "UNKNOWN"  # The nova-compute has not reported.
+    NONE = ""  # No host or nova-compute.
 
-    ALL = (UP, DOWN, MAINTENANCE, UNKNOWN)
+    ALL = (UP, DOWN, MAINTENANCE, UNKNOWN, NONE)
 
     def __init__(self):
         super(HostStatus, self).__init__(
@@ -462,6 +463,24 @@ class PciDeviceType(Enum):
     def __init__(self):
         super(PciDeviceType, self).__init__(
             valid_values=PciDeviceType.ALL)
+
+
+class DiskFormat(Enum):
+    RBD = "rbd"
+    LVM = "lvm"
+    QCOW2 = "qcow2"
+    RAW = "raw"
+    PLOOP = "ploop"
+    VHD = "vhd"
+    VMDK = "vmdk"
+    VDI = "vdi"
+    ISO = "iso"
+
+    ALL = (RBD, LVM, QCOW2, RAW, PLOOP, VHD, VMDK, VDI, ISO)
+
+    def __init__(self):
+        super(DiskFormat, self).__init__(
+            valid_values=DiskFormat.ALL)
 
 
 class IPAddress(FieldType):
@@ -712,6 +731,10 @@ class PciDeviceStatusField(BaseEnumField):
 
 class PciDeviceTypeField(BaseEnumField):
     AUTO_TYPE = PciDeviceType()
+
+
+class DiskFormatField(BaseEnumField):
+    AUTO_TYPE = DiskFormat()
 
 
 class IPAddressField(AutoTypedField):
