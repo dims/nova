@@ -17,13 +17,13 @@
 
 import copy
 import datetime
-import six
 import uuid
 
 import mock
 from oslo_config import cfg
 from oslo_serialization import jsonutils
 from oslo_utils import timeutils
+import six
 
 from nova.compute.monitors import base as monitor_base
 from nova.compute import resource_tracker
@@ -130,7 +130,6 @@ class FakeVirtDriver(driver.ComputeDriver):
                 'status': 'available',
                 'extra_k1': 'v1',
                 'numa_node': 1,
-                'parent_addr': None,
             },
             {
                 'label': 'label_8086_0123',
@@ -142,7 +141,6 @@ class FakeVirtDriver(driver.ComputeDriver):
                 'status': 'available',
                 'extra_k1': 'v1',
                 'numa_node': 1,
-                'parent_addr': None,
             },
             {
                 'label': 'label_8086_7891',

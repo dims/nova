@@ -251,6 +251,27 @@ class HVType(Enum):
         return super(HVType, self).coerce(obj, attr, value)
 
 
+class ImageSignatureHashType(Enum):
+    # Represents the possible hash methods used for image signing
+    def __init__(self):
+        self.hashes = ('SHA-224', 'SHA-256', 'SHA-384', 'SHA-512')
+        super(ImageSignatureHashType, self).__init__(
+            valid_values=self.hashes
+        )
+
+
+class ImageSignatureKeyType(Enum):
+    # Represents the possible keypair types used for image signing
+    def __init__(self):
+        self.key_types = (
+            'DSA', 'ECC_SECT571K1', 'ECC_SECT409K1', 'ECC_SECT571R1',
+            'ECC_SECT409R1', 'ECC_SECP521R1', 'ECC_SECP384R1', 'RSA-PSS'
+        )
+        super(ImageSignatureKeyType, self).__init__(
+            valid_values=self.key_types
+        )
+
+
 class OSType(Enum):
 
     LINUX = "linux"
@@ -442,8 +463,11 @@ class PciDeviceStatus(Enum):
     ALLOCATED = "allocated"
     REMOVED = "removed"  # The device has been hot-removed and not yet deleted
     DELETED = "deleted"  # The device is marked not available/deleted.
+    UNCLAIMABLE = "unclaimable"
+    UNAVAILABLE = "unavailable"
 
-    ALL = (AVAILABLE, CLAIMED, ALLOCATED, REMOVED, DELETED)
+    ALL = (AVAILABLE, CLAIMED, ALLOCATED, REMOVED, DELETED, UNAVAILABLE,
+           UNCLAIMABLE)
 
     def __init__(self):
         super(PciDeviceStatus, self).__init__(
@@ -481,6 +505,44 @@ class DiskFormat(Enum):
     def __init__(self):
         super(DiskFormat, self).__init__(
             valid_values=DiskFormat.ALL)
+
+
+class NotificationPriority(Enum):
+    AUDIT = 'audit'
+    CRITICAL = 'critical'
+    DEBUG = 'debug'
+    INFO = 'info'
+    ERROR = 'error'
+    SAMPLE = 'sample'
+    WARN = 'warn'
+
+    ALL = (AUDIT, CRITICAL, DEBUG, INFO, ERROR, SAMPLE, WARN)
+
+    def __init__(self):
+        super(NotificationPriority, self).__init__(
+            valid_values=NotificationPriority.ALL)
+
+
+class NotificationPhase(Enum):
+    START = 'start'
+    END = 'end'
+    ERROR = 'error'
+
+    ALL = (START, END, ERROR)
+
+    def __init__(self):
+        super(NotificationPhase, self).__init__(
+            valid_values=NotificationPhase.ALL)
+
+
+class NotificationAction(Enum):
+    UPDATE = 'update'
+
+    ALL = (UPDATE,)
+
+    def __init__(self):
+        super(NotificationAction, self).__init__(
+            valid_values=NotificationAction.ALL)
 
 
 class IPAddress(FieldType):
@@ -693,6 +755,14 @@ class HVTypeField(BaseEnumField):
     AUTO_TYPE = HVType()
 
 
+class ImageSignatureHashTypeField(BaseEnumField):
+    AUTO_TYPE = ImageSignatureHashType()
+
+
+class ImageSignatureKeyTypeField(BaseEnumField):
+    AUTO_TYPE = ImageSignatureKeyType()
+
+
 class OSTypeField(BaseEnumField):
     AUTO_TYPE = OSType()
 
@@ -735,6 +805,18 @@ class PciDeviceTypeField(BaseEnumField):
 
 class DiskFormatField(BaseEnumField):
     AUTO_TYPE = DiskFormat()
+
+
+class NotificationPriorityField(BaseEnumField):
+    AUTO_TYPE = NotificationPriority()
+
+
+class NotificationPhaseField(BaseEnumField):
+    AUTO_TYPE = NotificationPhase()
+
+
+class NotificationActionField(BaseEnumField):
+    AUTO_TYPE = NotificationAction()
 
 
 class IPAddressField(AutoTypedField):

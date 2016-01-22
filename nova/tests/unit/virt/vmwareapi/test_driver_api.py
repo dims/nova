@@ -170,13 +170,14 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self.user_id = 'fake'
         self.project_id = 'fake'
         self.context = context.RequestContext(self.user_id, self.project_id)
-        stubs.set_stubs(self.stubs)
+        stubs.set_stubs(self)
         vmwareapi_fake.reset()
         nova.tests.unit.image.fake.stub_out_image_service(self)
         self.conn = driver.VMwareVCDriver(None, False)
         self._set_exception_vars()
         self.node_name = self.conn._nodename
         self.ds = 'ds1'
+        self._display_name = 'fake-display-name'
 
         self.vim = vmwareapi_fake.FakeVim()
 
@@ -187,12 +188,12 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         (image_service, image_id) = glance.get_remote_image_service(
             self.context, image_ref)
         metadata = image_service.show(self.context, image_id)
-        self.image = {
+        self.image = objects.ImageMeta.from_dict({
             'id': image_ref,
             'disk_format': 'vmdk',
             'size': int(metadata['size']),
-        }
-        self.fake_image_uuid = self.image['id']
+        })
+        self.fake_image_uuid = self.image.id
         nova.tests.unit.image.fake.stub_out_image_service(self)
         self.vnc_host = 'ha-host'
 
@@ -301,6 +302,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         if ephemeral is not None:
             self.type_data['ephemeral_gb'] = ephemeral
         values = {'name': 'fake_name',
+                  'display_name': self._display_name,
                   'id': 1,
                   'uuid': uuid,
                   'project_id': self.project_id,
@@ -348,7 +350,8 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         # Get record for VM
         vms = vmwareapi_fake._get_objects("VirtualMachine")
         for vm in vms.objects:
-            if vm.get('name') == self.uuid:
+            if vm.get('name') == vm_util._get_vm_name(self._display_name,
+                                                      self.uuid):
                 return vm
         self.fail('Unable to find VM backing!')
 
@@ -439,11 +442,6 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         uuids = self.conn.list_instance_uuids()
         self.assertEqual(1, len(uuids))
 
-    def test_list_instance_uuids_invalid_uuid(self):
-        self._create_vm(uuid='fake_id')
-        uuids = self.conn.list_instance_uuids()
-        self.assertEqual(0, len(uuids))
-
     def _cached_files_exist(self, exists=True):
         cache = ds_obj.DatastorePath(self.ds, 'vmware_base',
                                       self.fake_image_uuid,
@@ -493,7 +491,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         vmwareapi_fake.assertPathExists(self, str(root))
 
     def _iso_disk_type_created(self, instance_type='m1.large'):
-        self.image['disk_format'] = 'iso'
+        self.image.disk_format = 'iso'
         self._create_vm(instance_type=instance_type)
         path = ds_obj.DatastorePath(self.ds, 'vmware_base',
                                      self.fake_image_uuid,
@@ -521,7 +519,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
 
         self.stubs.Set(self.conn._vmops, "_attach_cdrom_to_vm",
                        fake_attach_cdrom)
-        self.image['disk_format'] = 'iso'
+        self.image.disk_format = 'iso'
         self._create_vm()
 
     @mock.patch.object(nova.virt.vmwareapi.images.VMwareImage,
@@ -559,7 +557,7 @@ class VMwareAPIVMTestCase(test.NoDBTestCase):
         self.stubs.Set(self.conn._vmops, '_create_config_drive',
                        fake_create_config_drive)
 
-        self.image['disk_format'] = 'iso'
+        self.image.disk_format = 'iso'
         self._create_vm()
         self.assertEqual(2, self.iso_index)
 

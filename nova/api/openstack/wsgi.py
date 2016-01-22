@@ -271,17 +271,7 @@ class ActionDispatcher(object):
         raise NotImplementedError()
 
 
-class TextDeserializer(ActionDispatcher):
-    """Default request body deserialization."""
-
-    def deserialize(self, datastring, action='default'):
-        return self.dispatch(datastring, action=action)
-
-    def default(self, datastring):
-        return {}
-
-
-class JSONDeserializer(TextDeserializer):
+class JSONDeserializer(ActionDispatcher):
 
     def _from_json(self, datastring):
         try:
@@ -290,57 +280,21 @@ class JSONDeserializer(TextDeserializer):
             msg = _("cannot understand JSON")
             raise exception.MalformedRequestBody(reason=msg)
 
+    def deserialize(self, datastring, action='default'):
+        return self.dispatch(datastring, action=action)
+
     def default(self, datastring):
         return {'body': self._from_json(datastring)}
 
 
-class DictSerializer(ActionDispatcher):
-    """Default request body serialization."""
+class JSONDictSerializer(ActionDispatcher):
+    """Default JSON request body serialization."""
 
     def serialize(self, data, action='default'):
         return self.dispatch(data, action=action)
 
     def default(self, data):
-        return ""
-
-
-class JSONDictSerializer(DictSerializer):
-    """Default JSON request body serialization."""
-
-    def default(self, data):
         return six.text_type(jsonutils.dumps(data))
-
-
-def serializers(**serializers):
-    """Attaches serializers to a method.
-
-    This decorator associates a dictionary of serializers with a
-    method.  Note that the function attributes are directly
-    manipulated; the method is not wrapped.
-    """
-
-    def decorator(func):
-        if not hasattr(func, 'wsgi_serializers'):
-            func.wsgi_serializers = {}
-        func.wsgi_serializers.update(serializers)
-        return func
-    return decorator
-
-
-def deserializers(**deserializers):
-    """Attaches deserializers to a method.
-
-    This decorator associates a dictionary of deserializers with a
-    method.  Note that the function attributes are directly
-    manipulated; the method is not wrapped.
-    """
-
-    def decorator(func):
-        if not hasattr(func, 'wsgi_deserializers'):
-            func.wsgi_deserializers = {}
-        func.wsgi_deserializers.update(deserializers)
-        return func
-    return decorator
 
 
 def response(code):

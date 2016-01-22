@@ -1200,8 +1200,16 @@ def numa_fit_instance_to_host(
     InstanceNUMATopology with it's cell ids set to host cell id's of
     the first successful permutation, or None.
     """
-    if (not (host_topology and instance_topology) or
-        len(host_topology) < len(instance_topology)):
+    if not (host_topology and instance_topology):
+        LOG.debug("Require both a host and instance NUMA topology to "
+                  "fit instance on host.")
+        return
+    elif len(host_topology) < len(instance_topology):
+        LOG.debug("There are not enough free cores on the system to schedule "
+                  "the instance correctly. Required: %(required)s, actual: "
+                  "%(actual)s",
+                  {'required': len(instance_topology),
+                   'actual': len(host_topology)})
         return
     else:
         # TODO(ndipanov): We may want to sort permutations differently
@@ -1407,7 +1415,7 @@ def get_host_numa_usage_from_instance(host, instance, free=False,
 
     :param host: nova.objects.ComputeNode instance, or a db object or dict
     :param instance: nova.objects.Instance instance, or a db object or dict
-    :param free: if True the the returned topology will have it's usage
+    :param free: if True the returned topology will have it's usage
                  decreased instead.
     :param never_serialize_result: if True result will always be an instance of
                                    objects.NUMATopology class.
