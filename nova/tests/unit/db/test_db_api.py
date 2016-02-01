@@ -95,7 +95,7 @@ def _quota_reserve(context, project_id, user_id):
 
     """
     def get_sync(resource, usage):
-        def sync(elevated, project_id, user_id, session):
+        def sync(elevated, project_id, user_id):
             return {resource: usage}
         return sync
     quotas = {}
@@ -904,7 +904,7 @@ class AggregateDBApiTestCase(test.TestCase):
         result = _create_aggregate(context=ctxt, metadata=None)
 
         def counted():
-            def get_query(context, id, session, read_deleted):
+            def get_query(context, id, read_deleted):
                 get_query.counter += 1
                 raise db_exc.DBDuplicateEntry
             get_query.counter = 0
@@ -1137,8 +1137,7 @@ class SqlAlchemyDbApiNoDbTestCase(test.NoDBTestCase):
         ctxt = mock.MagicMock()
         ctxt.elevated.return_value = mock.sentinel.elevated
         sqlalchemy_api.instance_get_all_by_filters_sort(ctxt, {}, marker='foo')
-        mock_get.assert_called_once_with(mock.sentinel.elevated,
-                                         'foo', session=mock.ANY)
+        mock_get.assert_called_once_with(mock.sentinel.elevated, 'foo')
         ctxt.elevated.assert_called_once_with(read_deleted='yes')
 
 
@@ -1237,10 +1236,10 @@ class SqlAlchemyDbApiTestCase(DbTestCase):
         ctxt = context.get_admin_context()
         sqlalchemy_api.instance_get_all_by_filters(ctxt, {'foo': 'bar'},
             'sort_key', 'sort_dir', limit=100, marker='uuid',
-            columns_to_join='columns', use_slave=True)
+            columns_to_join='columns')
         mock_get_all_filters_sort.assert_called_once_with(ctxt, {'foo': 'bar'},
             limit=100, marker='uuid', columns_to_join='columns',
-            use_slave=True, sort_keys=['sort_key'], sort_dirs=['sort_dir'])
+            sort_keys=['sort_key'], sort_dirs=['sort_dir'])
 
     def test_instance_get_all_by_filters_sort_key_invalid(self):
         '''InvalidSortKey raised if an invalid key is given.'''
@@ -1520,11 +1519,8 @@ class ModelsObjectComparatorMixin(object):
     def _dict_from_object(self, obj, ignored_keys):
         if ignored_keys is None:
             ignored_keys = []
-        if isinstance(obj, dict):
-            obj_items = obj.items()
-        else:
-            obj_items = obj.iteritems()
-        return {k: v for k, v in obj_items
+
+        return {k: v for k, v in obj.items()
                 if k not in ignored_keys}
 
     def _assertEqualObjects(self, obj1, obj2, ignored_keys=None):
@@ -2826,35 +2822,32 @@ class InstanceTestCase(test.TestCase, ModelsObjectComparatorMixin):
         self.assertEqual(meta, {'mk1': 'mv3'})
 
     def test_instance_update_and_get_original_no_conflict_on_session(self):
-        session = get_session()
-        # patch get_session so that we may inspect it outside of the
-        # method; once enginefacade is implemented, this can be simplified
-        with mock.patch("nova.db.sqlalchemy.api.get_session", lambda: session):
+        with sqlalchemy_api.main_context_manager.writer.using(self.ctxt):
             instance = self.create_instance_with_args()
             (old_ref, new_ref) = db.instance_update_and_get_original(
                 self.ctxt, instance['uuid'], {'metadata': {'mk1': 'mv3'}})
 
-        # test some regular persisted fields
-        self.assertEqual(old_ref.uuid, new_ref.uuid)
-        self.assertEqual(old_ref.project_id, new_ref.project_id)
+            # test some regular persisted fields
+            self.assertEqual(old_ref.uuid, new_ref.uuid)
+            self.assertEqual(old_ref.project_id, new_ref.project_id)
 
-        # after a copy operation, we can assert:
+            # after a copy operation, we can assert:
 
-        # 1. the two states have their own InstanceState
-        old_insp = inspect(old_ref)
-        new_insp = inspect(new_ref)
-        self.assertNotEqual(old_insp, new_insp)
+            # 1. the two states have their own InstanceState
+            old_insp = inspect(old_ref)
+            new_insp = inspect(new_ref)
+            self.assertNotEqual(old_insp, new_insp)
 
-        # 2. only one of the objects is still in our Session
-        self.assertIs(new_insp.session, session)
-        self.assertIsNone(old_insp.session)
+            # 2. only one of the objects is still in our Session
+            self.assertIs(new_insp.session, self.ctxt.session)
+            self.assertIsNone(old_insp.session)
 
-        # 3. The "new" object remains persistent and ready
-        # for updates
-        self.assertTrue(new_insp.persistent)
+            # 3. The "new" object remains persistent and ready
+            # for updates
+            self.assertTrue(new_insp.persistent)
 
-        # 4. the "old" object is detached from this Session.
-        self.assertTrue(old_insp.detached)
+            # 4. the "old" object is detached from this Session.
+            self.assertTrue(old_insp.detached)
 
     def test_instance_update_and_get_original_conflict_race(self):
         # Ensure that we retry if update_on_match fails for no discernable
@@ -7034,7 +7027,7 @@ class QuotaTestCase(test.TestCase, ModelsObjectComparatorMixin):
         _quota_reserve(self.ctxt, 'p1', 'u1')
         with mock.patch.object(query.Query, 'order_by') as order_mock:
             sqlalchemy_api._get_project_user_quota_usages(
-                self.ctxt, None, 'p1', 'u1')
+                self.ctxt, 'p1', 'u1')
         self.assertTrue(order_mock.called)
 
     def test_quota_usage_update_nonexistent(self):
@@ -7094,10 +7087,10 @@ class QuotaReserveNoDbTestCase(test.NoDBTestCase):
         # Now test if the QuotaUsage was created with a user_id or not.
         if per_project_quotas:
             quc.assert_called_once_with(
-                project_id, None, resource, 0, 0, None, session=session)
+                project_id, None, resource, 0, 0, None, session)
         else:
             quc.assert_called_once_with(
-                project_id, user_id, resource, 0, 0, None, session=session)
+                project_id, user_id, resource, 0, 0, None, session)
 
     def test_create_quota_usage_if_missing_created_per_project_quotas(self):
         self._test_create_quota_usage_if_missing_created(True)
@@ -7385,7 +7378,7 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
         service_data['host'] = 'host2'
         service = db.service_create(self.ctxt, service_data)
 
-        existing_node = dict(self.item.iteritems())
+        existing_node = dict(self.item.items())
         expected = [existing_node]
 
         for name in ['bm_node1', 'bm_node2']:

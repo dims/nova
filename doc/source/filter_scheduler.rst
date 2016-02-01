@@ -168,6 +168,24 @@ There are many standard filter classes which may be used
   the available metrics are passed.
 * |NUMATopologyFilter| - filters hosts based on the NUMA topology requested by the
   instance, if any.
+* |AggregateTypeExtraSpecsAffinityFilter| - filters only hosts aggregated inside
+  host aggregates containing "flavor_extra_spec" metadata. Keys inside this
+  variable must match with the instance extra specs.
+
+  The content of the list will be formatted as follows. The entries in the list
+  will be separated by commas without white space. Each entry will comprise of
+  an instance type extra spec key followed by and equals "=" followed by a
+  value: <key>=<value>.
+
+  Eg. 'flavor_extra_spec=hw:mem_page_size=any,hw:mem_page_size=~,hw:mem_page_size=small'
+
+  Valid sentinel values are:
+::
+
+  * (asterisk): may be used to specify that any value is valid.
+  ~ (tilde): may be used to specify that a key may optionally be omitted.
+  ! (exclamation): may be used to specify that the key must not be present.
+::
 
 Now we can focus on these standard filter classes in some detail. We'll skip the
 simplest ones, such as |AllHostsFilter|, |CoreFilter| and |RamFilter|,
@@ -379,6 +397,9 @@ The Filter Scheduler weighs hosts based on the config option
   Sort with the largest weight winning. If the multiplier is negative, the
   host with least RAM available will win (useful for stacking hosts, instead
   of spreading).
+* |DiskWeigher| Hosts are weighted and sorted by free disk space with the largest
+  weight winning.  If the multiplier is negative, the host with less disk space available
+  will win (useful for stacking hosts, instead of spreading).
 * |MetricsWeigher| This weigher can compute the weight based on the compute node
   host's various metrics. The to-be weighed metrics and their weighing ratio
   are specified in the configuration file as the followings::
@@ -443,6 +464,7 @@ in :mod:`nova.tests.scheduler`.
 .. |TrustedFilter| replace:: :class:`TrustedFilter <nova.scheduler.filters.trusted_filter.TrustedFilter>`
 .. |TypeAffinityFilter| replace:: :class:`TypeAffinityFilter <nova.scheduler.filters.type_filter.TypeAffinityFilter>`
 .. |AggregateTypeAffinityFilter| replace:: :class:`AggregateTypeAffinityFilter <nova.scheduler.filters.type_filter.AggregateTypeAffinityFilter>`
+.. |AggregateTypeExtraSpecsAffinityFilter| replace:: :class:`AggregateTypeExtraSpecsAffinityFilter <nova.scheduler.filters.type_filter.AggregateTypeExtraSpecsAffinityFilter>`
 .. |ServerGroupAntiAffinityFilter| replace:: :class:`ServerGroupAntiAffinityFilter <nova.scheduler.filters.affinity_filter.ServerGroupAntiAffinityFilter>`
 .. |ServerGroupAffinityFilter| replace:: :class:`ServerGroupAffinityFilter <nova.scheduler.filters.affinity_filter.ServerGroupAffinityFilter>`
 .. |AggregateInstanceExtraSpecsFilter| replace:: :class:`AggregateInstanceExtraSpecsFilter <nova.scheduler.filters.aggregate_instance_extra_specs.AggregateInstanceExtraSpecsFilter>`
@@ -455,3 +477,4 @@ in :mod:`nova.tests.scheduler`.
 .. |IoOpsWeigher| replace:: :class:`IoOpsWeigher <nova.scheduler.weights.io_ops.IoOpsWeigher>`
 .. |ServerGroupSoftAffinityWeigher| replace:: :class:`ServerGroupSoftAffinityWeigher <nova.scheduler.weights.affinity.ServerGroupSoftAffinityWeigher>`
 .. |ServerGroupSoftAntiAffinityWeigher| replace:: :class:`ServerGroupSoftAntiAffinityWeigher <nova.scheduler.weights.affinity.ServerGroupSoftAntiAffinityWeigher>`
+.. |DiskWeigher| replace:: :class:`DiskWeigher <nova.scheduler.weights.disk.DiskWeigher>`

@@ -29,7 +29,7 @@ LOG = logging.getLogger(__name__)
 
 
 # NOTE(danms): This is the global service version counter
-SERVICE_VERSION = 5
+SERVICE_VERSION = 6
 
 
 # NOTE(danms): This is our SERVICE_VERSION history. The idea is that any
@@ -63,6 +63,8 @@ SERVICE_VERSION_HISTORY = (
     {'compute_rpc': '4.6'},
     # Version 5: Add attachment_id kwarg to detach_volume()
     {'compute_rpc': '4.7'},
+    # Version 6: Compute RPC version 4.8
+    {'compute_rpc': '4.8'},
 )
 
 
@@ -224,9 +226,15 @@ class Service(base.NovaPersistentObject, base.NovaObject,
             return
         return cls._from_db_object(context, cls(), db_service)
 
+    @staticmethod
+    @db.select_db_reader_mode
+    def _db_service_get_by_compute_host(context, host, use_slave=False):
+        return db.service_get_by_compute_host(context, host)
+
     @base.remotable_classmethod
     def get_by_compute_host(cls, context, host, use_slave=False):
-        db_service = db.service_get_by_compute_host(context, host)
+        db_service = cls._db_service_get_by_compute_host(context, host,
+                                                         use_slave=use_slave)
         return cls._from_db_object(context, cls(), db_service)
 
     # NOTE(ndipanov): This is deprecated and should be removed on the next
@@ -314,6 +322,11 @@ class Service(base.NovaPersistentObject, base.NovaObject,
     def clear_min_version_cache(cls):
         cls._MIN_VERSION_CACHE = {}
 
+    @staticmethod
+    @db.select_db_reader_mode
+    def _db_service_get_minimum_version(context, binary, use_slave=False):
+        return db.service_get_minimum_version(context, binary)
+
     @base.remotable_classmethod
     def get_minimum_version(cls, context, binary, use_slave=False):
         if not binary.startswith('nova-'):
@@ -326,8 +339,8 @@ class Service(base.NovaPersistentObject, base.NovaObject,
             cached_version = cls._MIN_VERSION_CACHE.get(binary)
             if cached_version:
                 return cached_version
-        version = db.service_get_minimum_version(context, binary,
-                                                 use_slave=use_slave)
+        version = cls._db_service_get_minimum_version(context, binary,
+                                                      use_slave=use_slave)
         if version is None:
             return 0
         # NOTE(danms): Since our return value is not controlled by object
@@ -393,6 +406,7 @@ class ServiceList(base.ObjectListBase, base.NovaObject):
                                   db_services)
 
 
+@notification.notification_sample('service-update.json')
 @base.NovaObjectRegistry.register
 class ServiceStatusNotification(notification.NotificationBase):
     # Version 1.0: Initial version

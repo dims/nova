@@ -18,8 +18,8 @@ import collections
 import copy
 import uuid
 
-from keystoneclient.auth import base as ksc_auth_base
-from keystoneclient.fixture import V2Token
+from keystoneauth1.fixture import V2Token
+from keystoneauth1 import loading as ks_loading
 import mock
 from mox3 import mox
 from neutronclient.common import exceptions
@@ -2516,6 +2516,38 @@ class TestNeutronv2(TestNeutronv2Base):
         self.assertNotIn('should_create_bridge', net)
         self.assertEqual('port-id', iid)
 
+    def _test_nw_info_build_custom_bridge(self, vif_type, extra_details=None):
+        fake_port = {
+            'fixed_ips': [{'ip_address': '1.1.1.1'}],
+            'id': 'port-id',
+            'network_id': 'net-id',
+            'binding:vif_type': vif_type,
+            'binding:vif_details': {
+                model.VIF_DETAILS_BRIDGE_NAME: 'custom-bridge',
+            }
+        }
+        if extra_details:
+            fake_port['binding:vif_details'].update(extra_details)
+        fake_subnets = [model.Subnet(cidr='1.0.0.0/8')]
+        fake_nets = [{'id': 'net-id', 'name': 'foo', 'tenant_id': 'tenant'}]
+        api = neutronapi.API()
+        self.mox.ReplayAll()
+        neutronapi.get_client('fake')
+        net, iid = api._nw_info_build_network(fake_port, fake_nets,
+                                              fake_subnets)
+        self.assertNotEqual(CONF.neutron.ovs_bridge, net['bridge'])
+        self.assertEqual('custom-bridge', net['bridge'])
+
+    def test_nw_info_build_custom_ovs_bridge(self):
+        self._test_nw_info_build_custom_bridge(model.VIF_TYPE_OVS)
+
+    def test_nw_info_build_custom_ovs_bridge_vhostuser(self):
+        self._test_nw_info_build_custom_bridge(model.VIF_TYPE_VHOSTUSER,
+                {model.VIF_DETAILS_VHOSTUSER_OVS_PLUG: True})
+
+    def test_nw_info_build_custom_lb_bridge(self):
+        self._test_nw_info_build_custom_bridge(model.VIF_TYPE_BRIDGE)
+
     def test_build_network_info_model(self):
         api = neutronapi.API()
 
@@ -3937,8 +3969,8 @@ class TestNeutronClientForAdminScenarios(test.NoDBTestCase):
         # these are run (due to glonal conf object) and not be fully
         # representative of a "clean" slate at the start of a test.
         self.config_fixture = self.useFixture(config_fixture.Config())
-        plugin_class = ksc_auth_base.get_plugin_class('v2password')
-        plugin_class.register_conf_options(self.config_fixture, 'neutron')
+        oslo_opts = ks_loading.get_auth_plugin_conf_options('v2password')
+        self.config_fixture.register_opts(oslo_opts, 'neutron')
 
     @requests_mock.mock()
     def _test_get_client_for_admin(self, req_mock,
@@ -3949,7 +3981,7 @@ class TestNeutronClientForAdminScenarios(test.NoDBTestCase):
         req_mock.post(auth_url + '/tokens', json=token_resp)
 
         self.flags(url='http://anyhost/', group='neutron')
-        self.flags(auth_plugin='v2password', group='neutron')
+        self.flags(auth_type='v2password', group='neutron')
         self.flags(auth_url=auth_url, group='neutron')
         self.flags(timeout=30, group='neutron')
         if use_id:
@@ -3994,11 +4026,15 @@ class TestNeutronClientForAdminScenarios(test.NoDBTestCase):
             self.assertIsNone(admin_auth.tenant_id)
             self.assertIsNone(admin_auth.user_id)
 
-        self.assertEqual(CONF.neutron.timeout, neutronapi._SESSION.timeout)
+        self.assertEqual(CONF.neutron.timeout,
+                         neutronapi._SESSION.timeout)
 
-        self.assertEqual(token_value, context_client.httpclient.auth.token)
-        self.assertEqual(CONF.neutron.url,
-                         context_client.httpclient.auth.endpoint)
+        self.assertEqual(
+            token_value,
+            context_client.httpclient.auth.get_token(neutronapi._SESSION))
+        self.assertEqual(
+            CONF.neutron.url,
+            context_client.httpclient.get_endpoint())
 
     def test_get_client_for_admin(self):
         self._test_get_client_for_admin()

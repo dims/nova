@@ -29,7 +29,6 @@ from oslo_versionedobjects import base as ovo_base
 from oslo_versionedobjects import exception as ovo_exc
 from oslo_versionedobjects import fixture
 import six
-from testtools import matchers
 
 from nova import context
 from nova import exception
@@ -257,17 +256,6 @@ class _BaseTestCase(test.TestCase):
         a simple coercion on the object field value.
         """
         self.assertEqual(expected, str(obj_val))
-
-    def assertNotIsInstance(self, obj, cls, msg=None):
-        """Python < v2.7 compatibility.  Assert 'not isinstance(obj, cls)."""
-        try:
-            f = super(_BaseTestCase, self).assertNotIsInstance
-        except AttributeError:
-            self.assertThat(obj,
-                            matchers.Not(matchers.IsInstance(cls)),
-                            message=msg or '')
-        else:
-            f(obj, cls, msg=msg)
 
 
 class _LocalTest(_BaseTestCase):
@@ -1156,7 +1144,7 @@ object_data = {
     'InstancePCIRequest': '1.1-b1d75ebc716cb12906d9d513890092bf',
     'InstancePCIRequests': '1.1-65e38083177726d806684cb1cc0136d2',
     'LibvirtLiveMigrateBDMInfo': '1.0-252aabb723ca79d5469fa56f64b57811',
-    'LibvirtLiveMigrateData': '1.0-eb8b5f6c49ae3858213a7012558a2f3d',
+    'LibvirtLiveMigrateData': '1.0-7d257257e7f98198b2e4982c33cf3fa5',
     'KeyPair': '1.3-bfaa2a8b148cdf11e0c72435d9dd097a',
     'KeyPairList': '1.2-58b94f96e776bedaf1e192ddb2a24c4e',
     'Migration': '1.2-8784125bedcea0a9227318511904e853',
@@ -1190,7 +1178,7 @@ object_data = {
     'Service': '1.19-8914320cbeb4ec29f252d72ce55d07e1',
     'ServiceList': '1.17-b767102cba7cbed290e396114c3f86b3',
     'ServiceStatusNotification': '1.0-a73147b93b520ff0061865849d3dfa56',
-    'ServiceStatusPayload': '1.0-b13764918aaa0e29acc868cf38a0c39b',
+    'ServiceStatusPayload': '1.0-a5e7b4fd6cc5581be45b31ff1f3a3f7f',
     'TaskLog': '1.0-78b0534366f29aa3eebb01860fbe18fe',
     'TaskLogList': '1.0-cc8cce1af8a283b9d28b55fcd682e777',
     'Tag': '1.1-8b8d7d5b48887651a0e01241672e2963',
@@ -1207,9 +1195,9 @@ object_data = {
 
 class TestObjectVersions(test.NoDBTestCase):
     def test_versions(self):
-        checker = NotificationAwareObjectVersionChecker(
-                        base.NovaObjectRegistry.obj_classes())
-        fingerprints = checker.get_hashes()
+        checker = fixture.ObjectVersionChecker(
+            base.NovaObjectRegistry.obj_classes())
+        fingerprints = checker.get_hashes(extra_data_func=get_extra_data)
 
         if os.getenv('GENERATE_HASHES'):
             file('object_hashes.txt', 'w').write(
@@ -1239,13 +1227,13 @@ class TestObjectVersions(test.NoDBTestCase):
                 'field_2': fields.IntegerField(),   # filled by the schema
             }
 
-        checker = NotificationAwareObjectVersionChecker(
+        checker = fixture.ObjectVersionChecker(
             {'TestNotificationPayload': (TestNotificationPayload,)})
 
-        old_hash = checker._get_fingerprint('TestNotificationPayload')
+        old_hash = checker.get_hashes(extra_data_func=get_extra_data)
         TestNotificationPayload.SCHEMA['field_3'] = ('source_field',
                                                      'field_3')
-        new_hash = checker._get_fingerprint('TestNotificationPayload')
+        new_hash = checker.get_hashes(extra_data_func=get_extra_data)
 
         self.assertNotEqual(old_hash, new_hash)
 
@@ -1366,18 +1354,15 @@ class TestObjMethodOverrides(test.NoDBTestCase):
                     inspect.getargspec(obj_class.obj_reset_changes))
 
 
-class NotificationAwareObjectVersionChecker(fixture.ObjectVersionChecker):
-    def _get_fingerprint(self, obj_name, extra_data_func=None):
-        obj_class = copy.deepcopy(self.obj_classes[obj_name][0])
-        if issubclass(obj_class, notification.NotificationPayloadBase):
-            # Note(gibi): to make NotificationPayload version dependent on the
-            # SCHEMA of the payload we inject the SCHEMA content to the hash
-            # calculation algorithm
-            extra_relevant_data = collections.OrderedDict(
-                sorted(obj_class.SCHEMA.items()))
-            fields = getattr(obj_class, 'fields', {})
-            fields['_schema_'] = extra_relevant_data
-            setattr(obj_class, 'fields', fields)
+def get_extra_data(obj_class):
+    extra_data = tuple()
 
-        return super(NotificationAwareObjectVersionChecker,
-                     self)._get_fingerprint(obj_name)
+    # Get the SCHEMA items to add to the fingerprint
+    # if we are looking at a notification
+    if issubclass(obj_class, notification.NotificationPayloadBase):
+        schema_data = collections.OrderedDict(
+            sorted(obj_class.SCHEMA.items()))
+
+        extra_data += (schema_data,)
+
+    return extra_data

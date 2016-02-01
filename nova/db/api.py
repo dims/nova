@@ -106,16 +106,14 @@ def service_destroy(context, service_id):
     return IMPL.service_destroy(context, service_id)
 
 
-def service_get(context, service_id, use_slave=False):
+def service_get(context, service_id):
     """Get a service or raise if it does not exist."""
-    return IMPL.service_get(context, service_id,
-                            use_slave=use_slave)
+    return IMPL.service_get(context, service_id)
 
 
-def service_get_minimum_version(context, binary, use_slave=False):
+def service_get_minimum_version(context, binary):
     """Get the minimum service version in the database."""
-    return IMPL.service_get_minimum_version(context, binary,
-                                            use_slave=use_slave)
+    return IMPL.service_get_minimum_version(context, binary)
 
 
 def service_get_by_host_and_topic(context, host, topic):
@@ -148,13 +146,12 @@ def service_get_all_by_host(context, host):
     return IMPL.service_get_all_by_host(context, host)
 
 
-def service_get_by_compute_host(context, host, use_slave=False):
+def service_get_by_compute_host(context, host):
     """Get the service entry for a given compute host.
 
     Returns the service entry joined with the compute_node entry.
     """
-    return IMPL.service_get_by_compute_host(context, host,
-                                            use_slave=use_slave)
+    return IMPL.service_get_by_compute_host(context, host)
 
 
 def service_create(context, values):
@@ -656,10 +653,9 @@ def instance_destroy(context, instance_uuid, constraint=None):
     return IMPL.instance_destroy(context, instance_uuid, constraint)
 
 
-def instance_get_by_uuid(context, uuid, columns_to_join=None, use_slave=False):
+def instance_get_by_uuid(context, uuid, columns_to_join=None):
     """Get an instance or raise if it does not exist."""
-    return IMPL.instance_get_by_uuid(context, uuid,
-                                     columns_to_join, use_slave=use_slave)
+    return IMPL.instance_get_by_uuid(context, uuid, columns_to_join)
 
 
 def instance_get(context, instance_id, columns_to_join=None):
@@ -675,7 +671,7 @@ def instance_get_all(context, columns_to_join=None):
 
 def instance_get_all_by_filters(context, filters, sort_key='created_at',
                                 sort_dir='desc', limit=None, marker=None,
-                                columns_to_join=None, use_slave=False):
+                                columns_to_join=None):
     """Get all instances that match all filters."""
     # Note: This function exists for backwards compatibility since calls to
     # the instance layer coming in over RPC may specify the single sort
@@ -684,27 +680,24 @@ def instance_get_all_by_filters(context, filters, sort_key='created_at',
     return IMPL.instance_get_all_by_filters(context, filters, sort_key,
                                             sort_dir, limit=limit,
                                             marker=marker,
-                                            columns_to_join=columns_to_join,
-                                            use_slave=use_slave)
+                                            columns_to_join=columns_to_join)
 
 
 def instance_get_all_by_filters_sort(context, filters, limit=None,
                                      marker=None, columns_to_join=None,
-                                     use_slave=False, sort_keys=None,
-                                     sort_dirs=None):
+                                     sort_keys=None, sort_dirs=None):
     """Get all instances that match all filters sorted by multiple keys.
 
     sort_keys and sort_dirs must be a list of strings.
     """
     return IMPL.instance_get_all_by_filters_sort(
         context, filters, limit=limit, marker=marker,
-        columns_to_join=columns_to_join, use_slave=use_slave,
-        sort_keys=sort_keys, sort_dirs=sort_dirs)
+        columns_to_join=columns_to_join, sort_keys=sort_keys,
+        sort_dirs=sort_dirs)
 
 
 def instance_get_active_by_window_joined(context, begin, end=None,
                                          project_id=None, host=None,
-                                         use_slave=False,
                                          columns_to_join=None):
     """Get instances and joins active during a certain time window.
 
@@ -713,16 +706,12 @@ def instance_get_active_by_window_joined(context, begin, end=None,
     """
     return IMPL.instance_get_active_by_window_joined(context, begin, end,
                                               project_id, host,
-                                              use_slave=use_slave,
                                               columns_to_join=columns_to_join)
 
 
-def instance_get_all_by_host(context, host,
-                             columns_to_join=None, use_slave=False):
+def instance_get_all_by_host(context, host, columns_to_join=None):
     """Get all instances belonging to a host."""
-    return IMPL.instance_get_all_by_host(context, host,
-                                         columns_to_join,
-                                         use_slave=use_slave)
+    return IMPL.instance_get_all_by_host(context, host, columns_to_join)
 
 
 def instance_get_all_by_host_and_node(context, host, node,
@@ -1208,20 +1197,16 @@ def block_device_mapping_update_or_create(context, values, legacy=True):
     return IMPL.block_device_mapping_update_or_create(context, values, legacy)
 
 
-def block_device_mapping_get_all_by_instance_uuids(context, instance_uuids,
-                                                   use_slave=False):
+def block_device_mapping_get_all_by_instance_uuids(context, instance_uuids):
     """Get all block device mapping belonging to a list of instances."""
     return IMPL.block_device_mapping_get_all_by_instance_uuids(context,
-                                                               instance_uuids,
-                                                               use_slave)
+                                                               instance_uuids)
 
 
-def block_device_mapping_get_all_by_instance(context, instance_uuid,
-                                             use_slave=False):
+def block_device_mapping_get_all_by_instance(context, instance_uuid):
     """Get all block device mapping belonging to an instance."""
     return IMPL.block_device_mapping_get_all_by_instance(context,
-                                                         instance_uuid,
-                                                         use_slave)
+                                                         instance_uuid)
 
 
 def block_device_mapping_get_all_by_volume_id(context, volume_id,

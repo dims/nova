@@ -879,7 +879,7 @@ class API(base.Base):
             'root_gb': instance_type['root_gb'],
             'ephemeral_gb': instance_type['ephemeral_gb'],
             'display_name': display_name,
-            'display_description': display_description or '',
+            'display_description': display_description,
             'user_data': user_data,
             'key_name': key_name,
             'key_data': key_data,
@@ -906,7 +906,7 @@ class API(base.Base):
     def _provision_instances(self, context, instance_type, min_count,
             max_count, base_options, boot_meta, security_groups,
             block_device_mapping, shutdown_terminate,
-            instance_group, check_server_group_quota):
+            instance_group, check_server_group_quota, filter_properties):
         # Reserve quotas
         num_instances, quotas = self._check_num_instances_quota(
                 context, instance_type, min_count, max_count)
@@ -914,7 +914,18 @@ class API(base.Base):
         instances = []
         try:
             for i in range(num_instances):
+                # Create a uuid for the instance so we can store the
+                # RequestSpec before the instance is created.
+                instance_uuid = str(uuid.uuid4())
+                # Store the RequestSpec that will be used for scheduling.
+                req_spec = objects.RequestSpec.from_components(context,
+                        instance_uuid, boot_meta, instance_type,
+                        base_options['numa_topology'],
+                        base_options['pci_requests'], filter_properties,
+                        instance_group, base_options['availability_zone'])
+                req_spec.create()
                 instance = objects.Instance(context=context)
+                instance.uuid = instance_uuid
                 instance.update(base_options)
                 instance = self.create_db_entry_for_new_instance(
                         context, instance_type, boot_meta, instance,
@@ -1074,10 +1085,10 @@ class API(base.Base):
         if max_net_count == 0:
             raise exception.PortLimitExceeded()
         elif max_net_count < max_count:
-            LOG.debug("max count reduced from %(max_count)d to "
-                      "%(max_net_count)d due to network port quota",
-                      {'max_count': max_count,
-                       'max_net_count': max_net_count})
+            LOG.info(_LI("max count reduced from %(max_count)d to "
+                         "%(max_net_count)d due to network port quota"),
+                        {'max_count': max_count,
+                         'max_net_count': max_net_count})
             max_count = max_net_count
 
         block_device_mapping = self._check_and_transform_bdm(context,
@@ -1096,7 +1107,7 @@ class API(base.Base):
         instances = self._provision_instances(context, instance_type,
                 min_count, max_count, base_options, boot_meta, security_groups,
                 block_device_mapping, shutdown_terminate,
-                instance_group, check_server_group_quota)
+                instance_group, check_server_group_quota, filter_properties)
 
         for instance in instances:
             self._record_action_start(context, instance,
@@ -1183,7 +1194,8 @@ class API(base.Base):
             bdm.instance_uuid = instance_uuid
             bdm.update_or_create()
 
-    def _validate_bdm(self, context, instance, instance_type, all_mappings):
+    def _validate_bdm(self, context, instance, instance_type,
+                      block_device_mappings):
         def _subsequent_list(l):
             # Each device which is capable of being used as boot device should
             # be given a unique boot index, starting from 0 in ascending order.
@@ -1193,17 +1205,18 @@ class API(base.Base):
         # Setting a negative value or None indicates that the device should not
         # be used for booting.
         boot_indexes = sorted([bdm.boot_index
-                               for bdm in all_mappings
+                               for bdm in block_device_mappings
                                if bdm.boot_index is not None
                                and bdm.boot_index >= 0])
 
         if 0 not in boot_indexes or not _subsequent_list(boot_indexes):
             # Convert the BlockDeviceMappingList to a list for repr details.
             LOG.debug('Invalid block device mapping boot sequence for '
-                      'instance: %s', list(all_mappings), instance=instance)
+                      'instance: %s', list(block_device_mappings),
+                      instance=instance)
             raise exception.InvalidBDMBootSequence()
 
-        for bdm in all_mappings:
+        for bdm in block_device_mappings:
             # NOTE(vish): For now, just make sure the volumes are accessible.
             # Additionally, check that the volume can be attached to this
             # instance.
@@ -1250,13 +1263,13 @@ class API(base.Base):
                     "size"))
 
         ephemeral_size = sum(bdm.volume_size or 0
-                for bdm in all_mappings
+                for bdm in block_device_mappings
                 if block_device.new_format_is_ephemeral(bdm))
         if ephemeral_size > instance_type['ephemeral_gb']:
             raise exception.InvalidBDMEphemeralSize()
 
         # There should be only one swap
-        swap_list = block_device.get_bdm_swap_list(all_mappings)
+        swap_list = block_device.get_bdm_swap_list(block_device_mappings)
         if len(swap_list) > 1:
             msg = _("More than one swap drive requested.")
             raise exception.InvalidBDMFormat(details=msg)
@@ -1268,7 +1281,7 @@ class API(base.Base):
 
         max_local = CONF.max_local_block_devices
         if max_local >= 0:
-            num_local = len([bdm for bdm in all_mappings
+            num_local = len([bdm for bdm in block_device_mappings
                              if bdm.destination_type == 'local'])
             if num_local > max_local:
                 raise exception.InvalidBDMLocalsLimit()
@@ -1307,11 +1320,6 @@ class API(base.Base):
     def _populate_instance_for_create(self, context, instance, image,
                                       index, security_groups, instance_type):
         """Build the beginning of a new instance."""
-
-        if not instance.obj_attr_is_set('uuid'):
-            # Generate the instance_uuid here so we can use it
-            # for additional setup before creating the DB entry.
-            instance.uuid = str(uuid.uuid4())
 
         instance.launch_index = index
         instance.vm_state = vm_states.BUILDING

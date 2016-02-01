@@ -48,6 +48,7 @@ nova.tests.unit.api.openstack.compute.test_server_actions.ServerActionsControlle
 nova.tests.unit.api.openstack.compute.test_serversV21.Base64ValidationTest
 nova.tests.unit.api.openstack.compute.test_serversV21.ServersControllerCreateTest
 nova.tests.unit.api.openstack.compute.test_serversV21.ServersControllerRebuildInstanceTest
+nova.tests.unit.api.openstack.compute.test_serversV21.ServersControllerRebuildTestV219
 nova.tests.unit.api.openstack.compute.test_serversV21.ServersControllerTest
 nova.tests.unit.api.openstack.compute.test_serversV21.ServersControllerTestV29
 nova.tests.unit.api.openstack.compute.test_simple_tenant_usage.SimpleTenantUsageTestV2
@@ -78,10 +79,6 @@ nova.tests.unit.compute.test_compute_cells.CellsComputeAPITestCase
 nova.tests.unit.compute.test_host_api.ComputeHostAPICellsTestCase
 nova.tests.unit.compute.test_resources.BaseTestCase
 nova.tests.unit.compute.test_tracker.TestMoveClaim
-nova.tests.unit.conductor.test_conductor.ConductorLocalComputeTaskAPITestCase
-nova.tests.unit.conductor.test_conductor.ConductorTaskAPITestCase
-nova.tests.unit.conductor.test_conductor.ConductorTaskRPCAPITestCase
-nova.tests.unit.conductor.test_conductor.ConductorTaskTestCase
 nova.tests.unit.console.test_websocketproxy.NovaProxyRequestHandlerBaseTestCase
 nova.tests.unit.consoleauth.test_consoleauth.ControlauthMemcacheEncodingTestCase
 nova.tests.unit.db.test_migrations.TestNovaMigrationsMySQL
