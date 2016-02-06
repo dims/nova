@@ -1042,6 +1042,84 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         msg = mock_log.warning.call_args_list[1]
         self.assertIn('Removing the VIR_MIGRATE_PEER2PEER flag', msg[0][0])
 
+    @mock.patch('nova.virt.libvirt.driver.LOG')
+    def test_parse_migration_flags_config_mgmt(self, mock_log):
+        self._do_test_parse_migration_flags(
+            lm_config=('VIR_MIGRATE_PERSIST_DEST, '
+                       'VIR_MIGRATE_PEER2PEER, '
+                       'VIR_MIGRATE_LIVE, '
+                       'VIR_MIGRATE_TUNNELLED'),
+            bm_config=('VIR_MIGRATE_PERSIST_DEST, '
+                       'VIR_MIGRATE_PEER2PEER, '
+                       'VIR_MIGRATE_LIVE, '
+                       'VIR_MIGRATE_TUNNELLED, '
+                       'VIR_MIGRATE_NON_SHARED_INC'),
+            lm_expected=(libvirt_driver.libvirt.VIR_MIGRATE_UNDEFINE_SOURCE |
+                         libvirt_driver.libvirt.VIR_MIGRATE_PEER2PEER |
+                         libvirt_driver.libvirt.VIR_MIGRATE_LIVE |
+                         libvirt_driver.libvirt.VIR_MIGRATE_TUNNELLED),
+            bm_expected=(libvirt_driver.libvirt.VIR_MIGRATE_UNDEFINE_SOURCE |
+                         libvirt_driver.libvirt.VIR_MIGRATE_PEER2PEER |
+                         libvirt_driver.libvirt.VIR_MIGRATE_LIVE |
+                         libvirt_driver.libvirt.VIR_MIGRATE_TUNNELLED |
+                         libvirt_driver.libvirt.VIR_MIGRATE_NON_SHARED_INC))
+
+        msg = mock_log.warning.call_args_list[0]
+        self.assertIn('Adding the VIR_MIGRATE_UNDEFINE_SOURCE flag', msg[0][0])
+        msg = mock_log.warning.call_args_list[1]
+        self.assertIn('Removing the VIR_MIGRATE_PERSIST_DEST flag', msg[0][0])
+        msg = mock_log.warning.call_args_list[2]
+        self.assertIn('Adding the VIR_MIGRATE_UNDEFINE_SOURCE flag', msg[0][0])
+        msg = mock_log.warning.call_args_list[3]
+        self.assertIn('Removing the VIR_MIGRATE_PERSIST_DEST flag', msg[0][0])
+
+    @mock.patch('nova.virt.libvirt.driver.LOG')
+    def test_live_migration_tunnelled_true(self, mock_log):
+        self.flags(live_migration_tunnelled=True, group='libvirt')
+
+        self._do_test_parse_migration_flags(
+            lm_config=('VIR_MIGRATE_PEER2PEER, VIR_MIGRATE_UNDEFINE_SOURCE, '
+                       'VIR_MIGRATE_LIVE'),
+            bm_config=('VIR_MIGRATE_PEER2PEER, VIR_MIGRATE_UNDEFINE_SOURCE, '
+                       'VIR_MIGRATE_LIVE, VIR_MIGRATE_NON_SHARED_INC'),
+            lm_expected=(libvirt_driver.libvirt.VIR_MIGRATE_LIVE |
+                         libvirt_driver.libvirt.VIR_MIGRATE_PEER2PEER |
+                         libvirt_driver.libvirt.VIR_MIGRATE_UNDEFINE_SOURCE |
+                         libvirt_driver.libvirt.VIR_MIGRATE_TUNNELLED),
+            bm_expected=(libvirt_driver.libvirt.VIR_MIGRATE_LIVE |
+                         libvirt_driver.libvirt.VIR_MIGRATE_PEER2PEER |
+                         libvirt_driver.libvirt.VIR_MIGRATE_UNDEFINE_SOURCE |
+                         libvirt_driver.libvirt.VIR_MIGRATE_NON_SHARED_INC |
+                         libvirt_driver.libvirt.VIR_MIGRATE_TUNNELLED))
+
+        msg = mock_log.warning.call_args_list[0]
+        self.assertIn('does not contain the VIR_MIGRATE_TUNNELLED', msg[0][0])
+        msg = mock_log.warning.call_args_list[1]
+        self.assertIn('does not contain the VIR_MIGRATE_TUNNELLED', msg[0][0])
+
+    @mock.patch('nova.virt.libvirt.driver.LOG')
+    def test_live_migration_tunnelled_false(self, mock_log):
+        self.flags(live_migration_tunnelled=False, group='libvirt')
+
+        self._do_test_parse_migration_flags(
+            lm_config=('VIR_MIGRATE_PEER2PEER, VIR_MIGRATE_UNDEFINE_SOURCE, '
+                       'VIR_MIGRATE_LIVE, VIR_MIGRATE_TUNNELLED'),
+            bm_config=('VIR_MIGRATE_PEER2PEER, VIR_MIGRATE_UNDEFINE_SOURCE, '
+                       'VIR_MIGRATE_LIVE, VIR_MIGRATE_NON_SHARED_INC, '
+                       'VIR_MIGRATE_TUNNELLED'),
+            lm_expected=(libvirt_driver.libvirt.VIR_MIGRATE_LIVE |
+                         libvirt_driver.libvirt.VIR_MIGRATE_PEER2PEER |
+                         libvirt_driver.libvirt.VIR_MIGRATE_UNDEFINE_SOURCE),
+            bm_expected=(libvirt_driver.libvirt.VIR_MIGRATE_LIVE |
+                         libvirt_driver.libvirt.VIR_MIGRATE_PEER2PEER |
+                         libvirt_driver.libvirt.VIR_MIGRATE_UNDEFINE_SOURCE |
+                         libvirt_driver.libvirt.VIR_MIGRATE_NON_SHARED_INC))
+
+        msg = mock_log.warning.call_args_list[0]
+        self.assertIn('contains the VIR_MIGRATE_TUNNELLED flag', msg[0][0])
+        msg = mock_log.warning.call_args_list[1]
+        self.assertIn('contains the VIR_MIGRATE_TUNNELLED flag', msg[0][0])
+
     @mock.patch('nova.utils.get_image_from_system_metadata')
     @mock.patch.object(host.Host,
                        'has_min_version', return_value=True)
@@ -1915,7 +1993,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
         self.assertFalse(hasattr(drvr, '_bad_libvirt_numa_version_warn'))
         with mock.patch.object(drvr._host, 'has_version', return_value=True):
-            for i in xrange(2):
+            for i in range(2):
                 self.assertFalse(drvr._has_numa_support())
         self.assertTrue(drvr._bad_libvirt_numa_version_warn)
         self.assertEqual(1, mock_warn.call_count)
@@ -6094,7 +6172,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
                 filterref = './devices/interface/filterref'
                 vif = network_info[0]
                 nic_id = vif['address'].replace(':', '')
-                fw = firewall.NWFilterFirewall(fake.FakeVirtAPI(), drvr)
+                fw = firewall.NWFilterFirewall(drvr)
                 instance_filter_name = fw._instance_filter_name(instance_ref,
                                                                 nic_id)
                 self.assertEqual(tree.find(filterref).get('filter'),
@@ -6765,6 +6843,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             graphics_listen_addr_vnc='10.0.0.1',
             graphics_listen_addr_spice='10.0.0.2',
             serial_listen_addr='127.0.0.1',
+            target_connect_addr=None,
             bdms=[])
         self.mox.ReplayAll()
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
@@ -6802,6 +6881,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             connection_info=connection_info)
         migrate_data = objects.LibvirtLiveMigrateData(
             serial_listen_addr='',
+            target_connect_addr=None,
             bdms=[bdm])
 
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
@@ -6822,6 +6902,51 @@ class LibvirtConnTestCase(test.NoDBTestCase):
                              migrate_data, test_mock))
             mupdate.assert_called_once_with(target_xml, migrate_data.bdms,
                                             {}, '')
+
+    def test_live_migration_with_valid_target_connect_addr(self):
+        self.compute = importutils.import_object(CONF.compute_manager)
+        instance_dict = dict(self.test_instance)
+        instance_dict.update({'host': 'fake',
+                              'power_state': power_state.RUNNING,
+                              'vm_state': vm_states.ACTIVE})
+        instance_ref = objects.Instance(**instance_dict)
+        target_xml = self.device_xml_tmpl.format(
+            device_path='/dev/disk/by-path/'
+            'ip-1.2.3.4:3260-iqn.'
+            'cde.67890.opst-lun-Z')
+        # start test
+        connection_info = {
+            u'driver_volume_type': u'iscsi',
+            u'serial': u'58a84f6d-3f0c-4e19-a0af-eb657b790657',
+            u'data': {
+                u'access_mode': u'rw', u'target_discovered': False,
+                u'target_iqn': u'ip-1.2.3.4:3260-iqn.cde.67890.opst-lun-Z',
+                u'volume_id': u'58a84f6d-3f0c-4e19-a0af-eb657b790657',
+                'device_path':
+                u'/dev/disk/by-path/ip-1.2.3.4:3260-iqn.cde.67890.opst-lun-Z',
+            },
+        }
+        bdm = objects.LibvirtLiveMigrateBDMInfo(
+            serial='58a84f6d-3f0c-4e19-a0af-eb657b790657',
+            bus='virtio', type='disk', dev='vdb',
+            connection_info=connection_info)
+        migrate_data = objects.LibvirtLiveMigrateData(
+            serial_listen_addr='',
+            target_connect_addr='127.0.0.2',
+            bdms=[bdm])
+
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        test_mock = mock.MagicMock()
+
+        with mock.patch.object(drvr, '_update_xml') as mupdate:
+
+            test_mock.XMLDesc.return_value = target_xml
+            drvr._live_migration_operation(self.context, instance_ref,
+                                           'dest', False, migrate_data,
+                                           test_mock)
+            test_mock.migrateToURI2.assert_called_once_with(
+                'qemu+tcp://127.0.0.2/system',
+                None, mupdate(), None, None, 0)
 
     def test_update_volume_xml(self):
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
@@ -6983,6 +7108,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             graphics_listen_addr_vnc='10.0.0.1',
             graphics_listen_addr_spice='10.0.0.2',
             serial_listen_addr='9.0.0.12',
+            target_connect_addr=None,
             bdms=[])
         dom = fakelibvirt.virDomain
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
@@ -7005,7 +7131,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         CONF.set_override("enabled", True, "serial_console")
         dom = fakelibvirt.virDomain
         migrate_data = objects.LibvirtLiveMigrateData(
-            serial_listen_addr='')
+            serial_listen_addr='', target_connect_addr=None)
 
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         self.assertRaises(exception.MigrationError,
@@ -7038,6 +7164,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             graphics_listen_addr_vnc='0.0.0.0',
             graphics_listen_addr_spice='0.0.0.0',
             serial_listen_addr='127.0.0.1',
+            target_connect_addr=None,
             bdms=[])
         self.mox.ReplayAll()
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
@@ -7067,6 +7194,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         # start test
         migrate_data = objects.LibvirtLiveMigrateData(
             serial_listen_addr='',
+            target_connect_addr=None,
             bdms=[])
         self.mox.ReplayAll()
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
@@ -7094,7 +7222,8 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         migrate_data = objects.LibvirtLiveMigrateData(
             graphics_listen_addr_vnc='1.2.3.4',
             graphics_listen_addr_spice='1.2.3.4',
-            serial_listen_addr='127.0.0.1')
+            serial_listen_addr='127.0.0.1',
+            target_connect_addr=None)
         self.mox.ReplayAll()
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         self.assertRaises(exception.MigrationError,
@@ -7138,6 +7267,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             graphics_listen_addr_vnc='127.0.0.1',
             graphics_listen_addr_spice='127.0.0.1',
             serial_listen_addr='127.0.0.1',
+            target_connect_addr=None,
             bdms=[])
         self.mox.ReplayAll()
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
@@ -7183,6 +7313,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             graphics_listen_addr_vnc='0.0.0.0',
             graphics_listen_addr_spice='127.0.0.1',
             serial_listen_addr='127.0.0.1',
+            target_connect_addr=None,
             bdms=[])
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
 
@@ -7876,7 +8007,37 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         drvr._create_images_and_backing(self.context, self.test_instance,
                                         "/fake/instance/dir", None)
 
+    def _generate_target_ret(self, target_connect_addr=None):
+        target_ret = {
+        'graphics_listen_addrs': {'spice': '127.0.0.1', 'vnc': '127.0.0.1'},
+        'target_connect_addr': target_connect_addr,
+        'serial_listen_addr': '127.0.0.1',
+        'volume': {
+         '12345': {'connection_info': {u'data': {'device_path':
+              u'/dev/disk/by-path/ip-1.2.3.4:3260-iqn.abc.12345.opst-lun-X'},
+                   'serial': '12345'},
+                   'disk_info': {'bus': 'scsi',
+                                 'dev': 'sda',
+                                 'type': 'disk'}},
+         '67890': {'connection_info': {u'data': {'device_path':
+              u'/dev/disk/by-path/ip-1.2.3.4:3260-iqn.cde.67890.opst-lun-Z'},
+                   'serial': '67890'},
+                   'disk_info': {'bus': 'scsi',
+                                 'dev': 'sdb',
+                                 'type': 'disk'}}}}
+        return target_ret
+
     def test_pre_live_migration_works_correctly_mocked(self):
+        self._test_pre_live_migration_works_correctly_mocked()
+
+    def test_pre_live_migration_with_transport_ip(self):
+        self.flags(live_migration_inbound_addr='127.0.0.2',
+                   group='libvirt')
+        target_ret = self._generate_target_ret('127.0.0.2')
+        self._test_pre_live_migration_works_correctly_mocked(target_ret)
+
+    def _test_pre_live_migration_works_correctly_mocked(self,
+                                                        target_ret=None):
         # Creating testdata
         vol = {'block_device_mapping': [
            {'connection_info': {'serial': '12345', u'data':
@@ -7929,23 +8090,8 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         result = drvr.pre_live_migration(
             c, instance, vol, nw_info, None,
             migrate_data=migrate_data)
-
-        target_ret = {
-        'graphics_listen_addrs': {'spice': '127.0.0.1', 'vnc': '127.0.0.1'},
-        'serial_listen_addr': '127.0.0.1',
-        'volume': {
-         '12345': {'connection_info': {u'data': {'device_path':
-              u'/dev/disk/by-path/ip-1.2.3.4:3260-iqn.abc.12345.opst-lun-X'},
-                   'serial': '12345'},
-                   'disk_info': {'bus': 'scsi',
-                                 'dev': 'sda',
-                                 'type': 'disk'}},
-         '67890': {'connection_info': {u'data': {'device_path':
-              u'/dev/disk/by-path/ip-1.2.3.4:3260-iqn.cde.67890.opst-lun-Z'},
-                   'serial': '67890'},
-                   'disk_info': {'bus': 'scsi',
-                                 'dev': 'sdb',
-                                 'type': 'disk'}}}}
+        if not target_ret:
+            target_ret = self._generate_target_ret()
         self.assertEqual(
             result.to_legacy_dict(
                 pre_migration_result=True)['pre_live_migration_result'],
@@ -8003,6 +8149,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         )
         self.assertEqual({'graphics_listen_addrs': {'spice': '127.0.0.1',
                                                     'vnc': '127.0.0.1'},
+                          'target_connect_addr': None,
                           'serial_listen_addr': '127.0.0.1',
                           'volume': {}}, res_data['pre_live_migration_result'])
 
@@ -8061,6 +8208,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
             target_ret = {
             'graphics_listen_addrs': {'spice': '127.0.0.1',
                                       'vnc': '127.0.0.1'},
+            'target_connect_addr': None,
             'serial_listen_addr': '127.0.0.1',
             'volume': {
             '12345': {'connection_info': {u'data': {'device_path':

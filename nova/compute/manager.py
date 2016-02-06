@@ -602,9 +602,6 @@ class ComputeVirtAPI(virtapi.VirtAPI):
         super(ComputeVirtAPI, self).__init__()
         self._compute = compute
 
-    def provider_fw_rule_get_all(self, context):
-        return self._compute.conductor_api.provider_fw_rule_get_all(context)
-
     def _default_error_callback(self, event_name, instance):
         raise exception.NovaException(_('Instance event failed'))
 
@@ -1392,11 +1389,6 @@ class ComputeManager(manager.Manager):
 
         return _sync_refresh()
 
-    @wrap_exception()
-    def refresh_provider_fw_rules(self, context):
-        """This call passes straight through to the virtualization driver."""
-        return self.driver.refresh_provider_fw_rules()
-
     def _await_block_device_map_created(self, context, vol_id):
         # TODO(yamahata): creating volume simultaneously
         #                 reduces creation time?
@@ -1734,10 +1726,20 @@ class ComputeManager(manager.Manager):
                 'swap': swap,
                 'block_device_mapping': mapping})
 
+    def _check_dev_name(self, bdms, instance):
+        bdms_no_device_name = [x for x in bdms if x.device_name is None]
+        for bdm in bdms_no_device_name:
+            device_name = self._get_device_name_for_instance(instance,
+                                                             bdms,
+                                                             bdm)
+            values = {'device_name': device_name}
+            bdm.update(values)
+
     def _prep_block_device(self, context, instance, bdms,
                            do_check_attach=True):
         """Set up the block device for an instance with error logging."""
         try:
+            self._check_dev_name(bdms, instance)
             block_device_info = driver.get_block_device_info(instance, bdms)
             mapping = driver.block_device_info_get_mapping(block_device_info)
             driver_block_device.attach_block_devices(
@@ -2781,6 +2783,13 @@ class ComputeManager(manager.Manager):
                         'rebuild.error', fault=e)
                 raise exception.BuildAbortException(
                     instance_uuid=instance.uuid, reason=e.format_message())
+            except (exception.InstanceNotFound,
+                    exception.UnexpectedDeletingTaskStateError) as e:
+                LOG.debug('Instance was deleted while rebuilding',
+                          instance=instance)
+                self._set_migration_status(migration, 'failed')
+                self._notify_about_instance_usage(context, instance,
+                        'rebuild.error', fault=e)
             except Exception as e:
                 self._set_migration_status(migration, 'failed')
                 self._notify_about_instance_usage(context, instance,
@@ -5615,7 +5624,8 @@ class ComputeManager(manager.Manager):
                 try:
                     inst = objects.Instance.get_by_uuid(
                             context, instance_uuids.pop(0),
-                            expected_attrs=['system_metadata', 'info_cache'],
+                            expected_attrs=['system_metadata', 'info_cache',
+                                            'flavor'],
                             use_slave=True)
                 except exception.InstanceNotFound:
                     # Instance is gone.  Try to grab another.

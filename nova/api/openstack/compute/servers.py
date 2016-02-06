@@ -434,7 +434,7 @@ class ServersController(wsgi.Controller):
         :param is_detail: True if you plan on showing the details of the
             instance in the response, False otherwise.
         """
-        expected_attrs = ['flavor', 'pci_devices']
+        expected_attrs = ['flavor', 'pci_devices', 'numa_topology']
         if is_detail:
             expected_attrs = self._view_builder.get_show_expected_attrs(
                                                             expected_attrs)
@@ -672,6 +672,7 @@ class ServersController(wsgi.Controller):
                 exception.NetworkRequiresSubnet,
                 exception.NetworkNotFound,
                 exception.NetworkDuplicated,
+                exception.InvalidBDM,
                 exception.InvalidBDMSnapshot,
                 exception.InvalidBDMVolume,
                 exception.InvalidBDMImage,
@@ -902,15 +903,6 @@ class ServersController(wsgi.Controller):
         except exception.QuotaError as error:
             raise exc.HTTPForbidden(
                 explanation=error.format_message())
-        except exception.FlavorNotFound:
-            msg = _("Unable to locate requested flavor.")
-            raise exc.HTTPBadRequest(explanation=msg)
-        except exception.CannotResizeToSameFlavor:
-            msg = _("Resize requires a flavor change.")
-            raise exc.HTTPBadRequest(explanation=msg)
-        except (exception.CannotResizeDisk,
-                exception.AutoDiskConfigDisabledByImage) as e:
-            raise exc.HTTPBadRequest(explanation=e.format_message())
         except exception.InstanceIsLocked as e:
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
@@ -924,8 +916,11 @@ class ServersController(wsgi.Controller):
             msg = _("Image that the instance was started "
                     "with could not be found.")
             raise exc.HTTPBadRequest(explanation=msg)
-        except (exception.NoValidHost,
-                exception.AutoDiskConfigDisabledByImage) as e:
+        except (exception.AutoDiskConfigDisabledByImage,
+                exception.CannotResizeDisk,
+                exception.CannotResizeToSameFlavor,
+                exception.FlavorNotFound,
+                exception.NoValidHost) as e:
             raise exc.HTTPBadRequest(explanation=e.format_message())
         except exception.Invalid:
             msg = _("Invalid instance image.")

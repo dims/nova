@@ -156,6 +156,12 @@ libvirt_opts = [
     cfg.BoolOpt('use_usb_tablet',
                 default=True,
                 help='Sync virtual and real mouse cursors in Windows VMs'),
+    cfg.StrOpt('live_migration_inbound_addr',
+               default=None,
+               help='Live migration target ip or hostname '
+                    '(if this option is set to be None,'
+                    'the hostname of the migration target'
+                    'compute node will be used)'),
     cfg.StrOpt('live_migration_uri',
                default="qemu+tcp://%s/system",
                help='Migration target URI '
@@ -164,12 +170,34 @@ libvirt_opts = [
     cfg.StrOpt('live_migration_flag',
                default='VIR_MIGRATE_UNDEFINE_SOURCE, VIR_MIGRATE_PEER2PEER, '
                        'VIR_MIGRATE_LIVE, VIR_MIGRATE_TUNNELLED',
-               help='Migration flags to be set for live migration'),
+               help='Migration flags to be set for live migration',
+               deprecated_for_removal=True,
+               deprecated_reason='The correct live migration flags can be '
+                                 'inferred from the new '
+                                 'live_migration_tunnelled config option. '
+                                 'live_migration_flag will be removed to '
+                                 'avoid potential misconfiguration.'),
     cfg.StrOpt('block_migration_flag',
                default='VIR_MIGRATE_UNDEFINE_SOURCE, VIR_MIGRATE_PEER2PEER, '
                        'VIR_MIGRATE_LIVE, VIR_MIGRATE_TUNNELLED, '
                        'VIR_MIGRATE_NON_SHARED_INC',
-               help='Migration flags to be set for block migration'),
+               help='Migration flags to be set for block migration',
+               deprecated_for_removal=True,
+               deprecated_reason='The correct block migration flags can be '
+                                 'inferred from the new '
+                                 'live_migration_tunnelled config option. '
+                                 'block_migration_flag will be removed to '
+                                 'avoid potential misconfiguration.'),
+    cfg.BoolOpt('live_migration_tunnelled',
+                help='Whether to use tunnelled migration, where migration '
+                     'data is transported over the libvirtd connection. If '
+                     'True, we use the VIR_MIGRATE_TUNNELLED migration flag, '
+                     'avoiding the need to configure the network to allow '
+                     'direct hypervisor to hypervisor communication. If '
+                     'False, use the native transport. If not set, Nova '
+                     'will choose a sensible default based on, for example '
+                     'the availability of native encryption support in the '
+                     'hypervisor.'),
     cfg.IntOpt('live_migration_bandwidth',
                default=0,
                help='Maximum bandwidth(in MiB/s) to be used during migration. '
@@ -502,7 +530,6 @@ class LibvirtDriver(driver.ComputeDriver):
         self._caps = None
         self.firewall_driver = firewall.load_driver(
             DEFAULT_FIREWALL_DRIVER,
-            self.virtapi,
             host=self._host)
 
         self.vif_driver = libvirt_vif.LibvirtGenericVIFDriver()
@@ -688,6 +715,20 @@ class LibvirtDriver(driver.ComputeDriver):
                              'virt_type': CONF.libvirt.virt_type})
                 migration_flags |= libvirt.VIR_MIGRATE_PEER2PEER
 
+        if (migration_flags & libvirt.VIR_MIGRATE_UNDEFINE_SOURCE) == 0:
+            LOG.warning(_LW('Adding the VIR_MIGRATE_UNDEFINE_SOURCE flag to '
+                            '%(config_name)s because, without it, migrated '
+                            'VMs will remain defined on the source host'),
+                        {'config_name': config_name})
+            migration_flags |= libvirt.VIR_MIGRATE_UNDEFINE_SOURCE
+
+        if (migration_flags & libvirt.VIR_MIGRATE_PERSIST_DEST) != 0:
+            LOG.warning(_LW('Removing the VIR_MIGRATE_PERSIST_DEST flag from '
+                            '%(config_name)s as Nova ensures the VM is '
+                            'persisted on the destination host'),
+                        {'config_name': config_name})
+            migration_flags &= ~libvirt.VIR_MIGRATE_PERSIST_DEST
+
         return migration_flags
 
     def _check_block_migration_flags(self, live_migration_flags,
@@ -707,6 +748,31 @@ class LibvirtDriver(driver.ComputeDriver):
             block_migration_flags |= libvirt.VIR_MIGRATE_NON_SHARED_INC
 
         return (live_migration_flags, block_migration_flags)
+
+    def _handle_live_migration_tunnelled(self, migration_flags, config_name):
+        if CONF.libvirt.live_migration_tunnelled is None:
+            return migration_flags
+
+        if CONF.libvirt.live_migration_tunnelled:
+            if (migration_flags & libvirt.VIR_MIGRATE_TUNNELLED) == 0:
+                LOG.warning(_LW('The %(config_name)s config option does not '
+                                'contain the VIR_MIGRATE_TUNNELLED flag but '
+                                'the live_migration_tunnelled is set to True '
+                                'which causes VIR_MIGRATE_TUNNELLED to be '
+                                'set'),
+                            {'config_name': config_name})
+            migration_flags |= libvirt.VIR_MIGRATE_TUNNELLED
+        else:
+            if (migration_flags & libvirt.VIR_MIGRATE_TUNNELLED) != 0:
+                LOG.warning(_LW('The %(config_name)s config option contains '
+                                'the VIR_MIGRATE_TUNNELLED flag but the '
+                                'live_migration_tunnelled is set to False '
+                                'which causes VIR_MIGRATE_TUNNELLED to be '
+                                'unset'),
+                            {'config_name': config_name})
+            migration_flags &= ~libvirt.VIR_MIGRATE_TUNNELLED
+
+        return migration_flags
 
     def _parse_migration_flags(self):
         def str2sum(str_val):
@@ -733,6 +799,11 @@ class LibvirtDriver(driver.ComputeDriver):
         (live_migration_flags,
          block_migration_flags) = self._check_block_migration_flags(
              live_migration_flags, block_migration_flags)
+
+        live_migration_flags = self._handle_live_migration_tunnelled(
+            live_migration_flags, live_config_name)
+        block_migration_flags = self._handle_live_migration_tunnelled(
+            block_migration_flags, block_config_name)
 
         self._live_migration_flags = live_migration_flags
         self._block_migration_flags = block_migration_flags
@@ -2316,7 +2387,7 @@ class LibvirtDriver(driver.ComputeDriver):
         #             call takes to return.
         self._prepare_pci_devices_for_use(
             pci_manager.get_instance_pci_devs(instance, 'all'))
-        for x in xrange(CONF.libvirt.wait_soft_reboot_seconds):
+        for x in range(CONF.libvirt.wait_soft_reboot_seconds):
             guest = self._host.get_guest(instance)
 
             state = guest.get_power_state(self._host)
@@ -5251,9 +5322,6 @@ class LibvirtDriver(driver.ComputeDriver):
     def refresh_instance_security_rules(self, instance):
         self.firewall_driver.refresh_instance_security_rules(instance)
 
-    def refresh_provider_fw_rules(self):
-        self.firewall_driver.refresh_provider_fw_rules()
-
     def get_available_resource(self, nodename):
         """Retrieve resource information.
 
@@ -5865,6 +5933,8 @@ class LibvirtDriver(driver.ComputeDriver):
                 listen_addrs['spice'] = str(
                     migrate_data.graphics_listen_addr_spice)
             serial_listen_addr = migrate_data.serial_listen_addr
+            if migrate_data.target_connect_addr is not None:
+                dest = migrate_data.target_connect_addr
 
             migratable_flag = getattr(libvirt, 'VIR_DOMAIN_XML_MIGRATABLE',
                                       None)
@@ -6523,6 +6593,9 @@ class LibvirtDriver(driver.ComputeDriver):
         migrate_data.graphics_listen_addr_spice = CONF.spice.server_listen
         migrate_data.serial_listen_addr = \
             CONF.serial_console.proxyclient_address
+        # Store live_migration_inbound_addr
+        migrate_data.target_connect_addr = \
+            CONF.libvirt.live_migration_inbound_addr
 
         for vol in block_device_mapping:
             connection_info = vol['connection_info']

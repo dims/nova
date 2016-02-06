@@ -66,6 +66,8 @@ class ComputeNode(base.NovaPersistentObject, base.NovaObject,
         'free_disk_gb': fields.IntegerField(nullable=True),
         'current_workload': fields.IntegerField(nullable=True),
         'running_vms': fields.IntegerField(nullable=True),
+        # TODO(melwitt): cpu_info is non-nullable in the schema but we must
+        # wait until version 2.0 of ComputeNode to change it to non-nullable
         'cpu_info': fields.StringField(nullable=True),
         'disk_available_least': fields.IntegerField(nullable=True),
         'metrics': fields.StringField(nullable=True),
@@ -228,6 +230,7 @@ class ComputeNode(base.NovaPersistentObject, base.NovaObject,
             context, host, nodename)
         return cls._from_db_object(context, cls(), db_compute)
 
+    # TODO(pkholkin): Remove this method in the next major version bump
     @base.remotable_classmethod
     def get_first_node_by_host_for_old_compat(cls, context, host,
                                               use_slave=False):
@@ -365,9 +368,14 @@ class ComputeNodeList(base.ObjectListBase, base.NovaObject):
         return base.obj_make_list(context, cls(context), objects.ComputeNode,
                                   db_computes)
 
+    @staticmethod
+    @db.select_db_reader_mode
+    def _db_compute_node_get_all_by_host(context, host, use_slave=False):
+        return db.compute_node_get_all_by_host(context, host)
+
     @base.remotable_classmethod
     def get_all_by_host(cls, context, host, use_slave=False):
-        db_computes = db.compute_node_get_all_by_host(context, host,
-                                                      use_slave)
+        db_computes = cls._db_compute_node_get_all_by_host(context, host,
+                                                      use_slave=use_slave)
         return base.obj_make_list(context, cls(context), objects.ComputeNode,
                                   db_computes)

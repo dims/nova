@@ -328,7 +328,7 @@ class ServersControllerTest(ControllerTest):
         def fake_get(_self, *args, **kwargs):
             expected_attrs = kwargs['expected_attrs']
             self.assertEqual(['flavor', 'info_cache', 'metadata',
-                              'pci_devices'], expected_attrs)
+                              'numa_topology', 'pci_devices'], expected_attrs)
             ctxt = context.RequestContext('fake', 'fake')
             return fake_instance.fake_instance_obj(
                 ctxt, expected_attrs=expected_attrs)
@@ -3239,6 +3239,13 @@ class ServersControllerCreateTest(test.TestCase):
     @mock.patch.object(compute_api.API, 'create',
                        side_effect=exception.InvalidBDMSwapSize)
     def test_create_instance_raise_invalid_bdm_swapsize(self, mock_create):
+        self.assertRaises(webob.exc.HTTPBadRequest,
+                          self.controller.create,
+                          self.req, body=self.body)
+
+    @mock.patch.object(compute_api.API, 'create',
+                       side_effect=exception.InvalidBDM)
+    def test_create_instance_raise_invalid_bdm(self, mock_create):
         self.assertRaises(webob.exc.HTTPBadRequest,
                           self.controller.create,
                           self.req, body=self.body)

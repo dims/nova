@@ -562,12 +562,9 @@ def service_update(context, service_id, values):
 
 ###################
 
+@main_context_manager.reader
 def compute_node_get(context, compute_id):
-    return _compute_node_get(context, compute_id)
-
-
-def _compute_node_get(context, compute_id, session=None):
-    result = model_query(context, models.ComputeNode, session=session).\
+    result = model_query(context, models.ComputeNode).\
             filter_by(id=compute_id).\
             first()
 
@@ -577,6 +574,7 @@ def _compute_node_get(context, compute_id, session=None):
     return result
 
 
+@main_context_manager.reader
 def compute_nodes_get_by_service_id(context, service_id):
     result = model_query(context, models.ComputeNode, read_deleted='no').\
         filter_by(service_id=service_id).\
@@ -588,6 +586,7 @@ def compute_nodes_get_by_service_id(context, service_id):
     return result
 
 
+@main_context_manager.reader
 def compute_node_get_by_host_and_nodename(context, host, nodename):
     result = model_query(context, models.ComputeNode, read_deleted='no').\
         filter_by(host=host, hypervisor_hostname=nodename).\
@@ -599,9 +598,9 @@ def compute_node_get_by_host_and_nodename(context, host, nodename):
     return result
 
 
-def compute_node_get_all_by_host(context, host, use_slave=False):
-    result = model_query(context, models.ComputeNode, read_deleted='no',
-                         use_slave=use_slave).\
+@main_context_manager.reader.allow_async
+def compute_node_get_all_by_host(context, host):
+    result = model_query(context, models.ComputeNode, read_deleted='no').\
         filter_by(host=host).\
         all()
 
@@ -611,10 +610,12 @@ def compute_node_get_all_by_host(context, host, use_slave=False):
     return result
 
 
+@main_context_manager.reader
 def compute_node_get_all(context):
     return model_query(context, models.ComputeNode, read_deleted='no').all()
 
 
+@main_context_manager.reader
 def compute_node_search_by_hypervisor(context, hypervisor_match):
     field = models.ComputeNode.hypervisor_hostname
     return model_query(context, models.ComputeNode).\
@@ -622,6 +623,7 @@ def compute_node_search_by_hypervisor(context, hypervisor_match):
             all()
 
 
+@main_context_manager.writer
 def compute_node_create(context, values):
     """Creates a new ComputeNode and populates the capacity fields
     with the most recent data.
@@ -630,40 +632,39 @@ def compute_node_create(context, values):
 
     compute_node_ref = models.ComputeNode()
     compute_node_ref.update(values)
-    compute_node_ref.save()
+    compute_node_ref.save(context.session)
 
     return compute_node_ref
 
 
 @oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True)
+@main_context_manager.writer
 def compute_node_update(context, compute_id, values):
     """Updates the ComputeNode record with the most recent data."""
 
-    session = get_session()
-    with session.begin():
-        compute_ref = _compute_node_get(context, compute_id, session=session)
-        # Always update this, even if there's going to be no other
-        # changes in data.  This ensures that we invalidate the
-        # scheduler cache of compute node data in case of races.
-        values['updated_at'] = timeutils.utcnow()
-        convert_objects_related_datetimes(values)
-        compute_ref.update(values)
+    compute_ref = compute_node_get(context, compute_id)
+    # Always update this, even if there's going to be no other
+    # changes in data.  This ensures that we invalidate the
+    # scheduler cache of compute node data in case of races.
+    values['updated_at'] = timeutils.utcnow()
+    convert_objects_related_datetimes(values)
+    compute_ref.update(values)
 
     return compute_ref
 
 
+@main_context_manager.writer
 def compute_node_delete(context, compute_id):
     """Delete a ComputeNode record."""
-    session = get_session()
-    with session.begin():
-        result = model_query(context, models.ComputeNode, session=session).\
-                 filter_by(id=compute_id).\
-                 soft_delete(synchronize_session=False)
+    result = model_query(context, models.ComputeNode).\
+             filter_by(id=compute_id).\
+             soft_delete(synchronize_session=False)
 
-        if not result:
-            raise exception.ComputeHostNotFound(host=compute_id)
+    if not result:
+        raise exception.ComputeHostNotFound(host=compute_id)
 
 
+@main_context_manager.reader
 def compute_node_statistics(context):
     """Compute statistics over all compute nodes."""
 
@@ -1164,6 +1165,13 @@ def fixed_ip_associate(context, address, instance_uuid, network_id=None,
 @main_context_manager.writer
 def fixed_ip_associate_pool(context, network_id, instance_uuid=None,
                             host=None, virtual_interface_id=None):
+    """allocate a fixed ip out of a fixed ip network pool.
+
+    This allocates an unallocated fixed ip out of a specified
+    network. We sort by updated_at to hand out the oldest address in
+    the list.
+
+    """
     if instance_uuid and not uuidutils.is_uuid_like(instance_uuid):
         raise exception.InvalidUUID(uuid=instance_uuid)
 
@@ -1175,6 +1183,7 @@ def fixed_ip_associate_pool(context, network_id, instance_uuid=None,
                            filter_by(instance_uuid=None).\
                            filter_by(host=None).\
                            filter_by(leased=False).\
+                           order_by(asc(models.FixedIp.updated_at)).\
                            first()
 
     if not fixed_ip_ref:
@@ -1598,9 +1607,9 @@ def _handle_objects_related_type_conversions(values):
     convert_objects_related_datetimes(values, *datetime_keys)
 
 
-def _check_instance_exists_in_project(context, session, instance_uuid):
-    if not model_query(context, models.Instance, session=session,
-                       read_deleted="no", project_only=True).filter_by(
+def _check_instance_exists_in_project(context, instance_uuid):
+    if not model_query(context, models.Instance, read_deleted="no",
+                       project_only=True).filter_by(
                        uuid=instance_uuid).first():
         raise exception.InstanceNotFound(instance_id=instance_uuid)
 
@@ -1844,6 +1853,7 @@ def _manual_join_columns(columns_to_join):
 
 
 @require_context
+@main_context_manager.reader
 def instance_get_all(context, columns_to_join=None):
     if columns_to_join is None:
         columns_to_join_new = ['info_cache', 'security_groups']
@@ -2797,7 +2807,7 @@ def key_pair_count_by_user(context, user_id):
 
 ###################
 
-
+@main_context_manager.writer
 def network_associate(context, project_id, network_id=None, force=False):
     """Associate a project with a network.
 
@@ -2813,37 +2823,33 @@ def network_associate(context, project_id, network_id=None, force=False):
     force should only be used as a direct consequence of user request
     all automated requests should not use force
     """
-    session = get_session()
-    with session.begin():
+    def network_query(project_filter, id=None):
+        filter_kwargs = {'project_id': project_filter}
+        if id is not None:
+            filter_kwargs['id'] = id
+        return model_query(context, models.Network, read_deleted="no").\
+                       filter_by(**filter_kwargs).\
+                       with_lockmode('update').\
+                       first()
 
-        def network_query(project_filter, id=None):
-            filter_kwargs = {'project_id': project_filter}
-            if id is not None:
-                filter_kwargs['id'] = id
-            return model_query(context, models.Network, session=session,
-                              read_deleted="no").\
-                           filter_by(**filter_kwargs).\
-                           with_lockmode('update').\
-                           first()
+    if not force:
+        # find out if project has a network
+        network_ref = network_query(project_id)
 
-        if not force:
-            # find out if project has a network
-            network_ref = network_query(project_id)
+    if force or not network_ref:
+        # in force mode or project doesn't have a network so associate
+        # with a new network
 
-        if force or not network_ref:
-            # in force mode or project doesn't have a network so associate
-            # with a new network
+        # get new network
+        network_ref = network_query(None, network_id)
+        if not network_ref:
+            raise exception.NoMoreNetworks()
 
-            # get new network
-            network_ref = network_query(None, network_id)
-            if not network_ref:
-                raise exception.NoMoreNetworks()
-
-            # associate with network
-            # NOTE(vish): if with_lockmode isn't supported, as in sqlite,
-            #             then this has concurrency issues
-            network_ref['project_id'] = project_id
-            session.add(network_ref)
+        # associate with network
+        # NOTE(vish): if with_lockmode isn't supported, as in sqlite,
+        #             then this has concurrency issues
+        network_ref['project_id'] = project_id
+        context.session.add(network_ref)
     return network_ref
 
 
@@ -2852,45 +2858,44 @@ def _network_ips_query(context, network_id):
                    filter_by(network_id=network_id)
 
 
+@main_context_manager.reader
 def network_count_reserved_ips(context, network_id):
     return _network_ips_query(context, network_id).\
                     filter_by(reserved=True).\
                     count()
 
 
+@main_context_manager.writer
 def network_create_safe(context, values):
     network_ref = models.Network()
     network_ref['uuid'] = str(uuid.uuid4())
     network_ref.update(values)
 
     try:
-        network_ref.save()
+        network_ref.save(context.session)
         return network_ref
     except db_exc.DBDuplicateEntry:
         raise exception.DuplicateVlan(vlan=values['vlan'])
 
 
+@main_context_manager.writer
 def network_delete_safe(context, network_id):
-    session = get_session()
-    with session.begin():
-        result = model_query(context, models.FixedIp, session=session,
-                             read_deleted="no").\
-                         filter_by(network_id=network_id).\
-                         filter_by(allocated=True).\
-                         count()
-        if result != 0:
-            raise exception.NetworkInUse(network_id=network_id)
-        network_ref = _network_get(context, network_id=network_id,
-                                  session=session)
+    result = model_query(context, models.FixedIp, read_deleted="no").\
+                     filter_by(network_id=network_id).\
+                     filter_by(allocated=True).\
+                     count()
+    if result != 0:
+        raise exception.NetworkInUse(network_id=network_id)
+    network_ref = _network_get(context, network_id=network_id)
 
-        model_query(context, models.FixedIp, session=session,
-                    read_deleted="no").\
-                filter_by(network_id=network_id).\
-                soft_delete()
+    model_query(context, models.FixedIp, read_deleted="no").\
+            filter_by(network_id=network_id).\
+            soft_delete()
 
-        session.delete(network_ref)
+    context.session.delete(network_ref)
 
 
+@main_context_manager.writer
 def network_disassociate(context, network_id, disassociate_host,
                          disassociate_project):
     net_update = {}
@@ -2901,9 +2906,8 @@ def network_disassociate(context, network_id, disassociate_host,
     network_update(context, network_id, net_update)
 
 
-def _network_get(context, network_id, session=None, project_only='allow_none'):
-    result = model_query(context, models.Network, session=session,
-                         project_only=project_only).\
+def _network_get(context, network_id, project_only='allow_none'):
+    result = model_query(context, models.Network, project_only=project_only).\
                     filter_by(id=network_id).\
                     first()
 
@@ -2914,11 +2918,13 @@ def _network_get(context, network_id, session=None, project_only='allow_none'):
 
 
 @require_context
+@main_context_manager.reader
 def network_get(context, network_id, project_only='allow_none'):
     return _network_get(context, network_id, project_only=project_only)
 
 
 @require_context
+@main_context_manager.reader
 def network_get_all(context, project_only):
     result = model_query(context, models.Network, read_deleted="no",
                          project_only=project_only).all()
@@ -2930,6 +2936,7 @@ def network_get_all(context, project_only):
 
 
 @require_context
+@main_context_manager.reader
 def network_get_all_by_uuids(context, network_uuids, project_only):
     result = model_query(context, models.Network, read_deleted="no",
                          project_only=project_only).\
@@ -2954,7 +2961,7 @@ def network_get_all_by_uuids(context, network_uuids, project_only):
     return result
 
 
-def _get_associated_fixed_ips_query(network_id, host=None):
+def _get_associated_fixed_ips_query(context, network_id, host=None):
     # NOTE(vish): The ugly joins here are to solve a performance issue and
     #             should be removed once we can add and remove leases
     #             without regenerating the whole list
@@ -2963,42 +2970,44 @@ def _get_associated_fixed_ips_query(network_id, host=None):
                    models.VirtualInterface.deleted == 0)
     inst_and = and_(models.Instance.uuid == models.FixedIp.instance_uuid,
                     models.Instance.deleted == 0)
-    session = get_session()
     # NOTE(vish): This subquery left joins the minimum interface id for each
     #             instance. If the join succeeds (i.e. the 11th column is not
     #             null), then the fixed ip is on the first interface.
-    subq = session.query(func.min(models.VirtualInterface.id).label("id"),
-                         models.VirtualInterface.instance_uuid).\
-            group_by(models.VirtualInterface.instance_uuid).subquery()
+    subq = context.session.query(
+        func.min(models.VirtualInterface.id).label("id"),
+        models.VirtualInterface.instance_uuid).\
+        group_by(models.VirtualInterface.instance_uuid).subquery()
     subq_and = and_(subq.c.id == models.FixedIp.virtual_interface_id,
             subq.c.instance_uuid == models.VirtualInterface.instance_uuid)
-    query = session.query(models.FixedIp.address,
-                          models.FixedIp.instance_uuid,
-                          models.FixedIp.network_id,
-                          models.FixedIp.virtual_interface_id,
-                          models.VirtualInterface.address,
-                          models.Instance.hostname,
-                          models.Instance.updated_at,
-                          models.Instance.created_at,
-                          models.FixedIp.allocated,
-                          models.FixedIp.leased,
-                          subq.c.id).\
-                          filter(models.FixedIp.deleted == 0).\
-                          filter(models.FixedIp.network_id == network_id).\
-                          join((models.VirtualInterface, vif_and)).\
-                          join((models.Instance, inst_and)).\
-                          outerjoin((subq, subq_and)).\
-                          filter(models.FixedIp.instance_uuid != null()).\
-                          filter(models.FixedIp.virtual_interface_id != null())
+    query = context.session.query(
+        models.FixedIp.address,
+        models.FixedIp.instance_uuid,
+        models.FixedIp.network_id,
+        models.FixedIp.virtual_interface_id,
+        models.VirtualInterface.address,
+        models.Instance.hostname,
+        models.Instance.updated_at,
+        models.Instance.created_at,
+        models.FixedIp.allocated,
+        models.FixedIp.leased,
+        subq.c.id).\
+        filter(models.FixedIp.deleted == 0).\
+        filter(models.FixedIp.network_id == network_id).\
+        join((models.VirtualInterface, vif_and)).\
+        join((models.Instance, inst_and)).\
+        outerjoin((subq, subq_and)).\
+        filter(models.FixedIp.instance_uuid != null()).\
+        filter(models.FixedIp.virtual_interface_id != null())
     if host:
         query = query.filter(models.Instance.host == host)
     return query
 
 
+@main_context_manager.reader
 def network_get_associated_fixed_ips(context, network_id, host=None):
     # FIXME(sirp): since this returns fixed_ips, this would be better named
     # fixed_ip_get_all_by_network.
-    query = _get_associated_fixed_ips_query(network_id, host)
+    query = _get_associated_fixed_ips_query(context, network_id, host)
     result = query.all()
     data = []
     for datum in result:
@@ -3020,16 +3029,17 @@ def network_get_associated_fixed_ips(context, network_id, host=None):
     return data
 
 
+@main_context_manager.reader
 def network_in_use_on_host(context, network_id, host):
-    query = _get_associated_fixed_ips_query(network_id, host)
+    query = _get_associated_fixed_ips_query(context, network_id, host)
     return query.count() > 0
 
 
-def _network_get_query(context, session=None):
-    return model_query(context, models.Network, session=session,
-                       read_deleted="no")
+def _network_get_query(context):
+    return model_query(context, models.Network, read_deleted="no")
 
 
+@main_context_manager.reader
 def network_get_by_uuid(context, uuid):
     result = _network_get_query(context).filter_by(uuid=uuid).first()
 
@@ -3039,6 +3049,7 @@ def network_get_by_uuid(context, uuid):
     return result
 
 
+@main_context_manager.reader
 def network_get_by_cidr(context, cidr):
     result = _network_get_query(context).\
                 filter(or_(models.Network.cidr == cidr,
@@ -3051,14 +3062,13 @@ def network_get_by_cidr(context, cidr):
     return result
 
 
+@main_context_manager.reader
 def network_get_all_by_host(context, host):
-    session = get_session()
     fixed_host_filter = or_(models.FixedIp.host == host,
             and_(models.FixedIp.instance_uuid != null(),
                  models.Instance.host == host))
     fixed_ip_query = model_query(context, models.FixedIp,
-                                 (models.FixedIp.network_id,),
-                                 session=session).\
+                                 (models.FixedIp.network_id,)).\
                      outerjoin((models.Instance,
                                 models.Instance.uuid ==
                                 models.FixedIp.instance_uuid)).\
@@ -3068,13 +3078,12 @@ def network_get_all_by_host(context, host):
     #             or that have an instance with host set
     host_filter = or_(models.Network.host == host,
                       models.Network.id.in_(fixed_ip_query.subquery()))
-    return _network_get_query(context, session=session).\
-                       filter(host_filter).\
-                       all()
+    return _network_get_query(context).filter(host_filter).all()
 
 
 @oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True,
                            retry_on_request=True)
+@main_context_manager.writer
 def network_set_host(context, network_id, host_id):
     network_ref = _network_get_query(context).\
         filter_by(id=network_id).\
@@ -3099,16 +3108,15 @@ def network_set_host(context, network_id, host_id):
 
 
 @require_context
+@main_context_manager.writer
 def network_update(context, network_id, values):
-    session = get_session()
-    with session.begin():
-        network_ref = _network_get(context, network_id, session=session)
-        network_ref.update(values)
-        try:
-            network_ref.save(session=session)
-        except db_exc.DBDuplicateEntry:
-            raise exception.DuplicateVlan(vlan=values['vlan'])
-        return network_ref
+    network_ref = _network_get(context, network_id)
+    network_ref.update(values)
+    try:
+        network_ref.save(context.session)
+    except db_exc.DBDuplicateEntry:
+        raise exception.DuplicateVlan(vlan=values['vlan'])
+    return network_ref
 
 
 ###################
@@ -4401,29 +4409,31 @@ def security_group_default_rule_list(context):
 ###################
 
 
+@main_context_manager.writer
 def provider_fw_rule_create(context, rule):
     fw_rule_ref = models.ProviderFirewallRule()
     fw_rule_ref.update(rule)
-    fw_rule_ref.save()
+    fw_rule_ref.save(context.session)
     return fw_rule_ref
 
 
+@main_context_manager.reader
 def provider_fw_rule_get_all(context):
     return model_query(context, models.ProviderFirewallRule).all()
 
 
+@main_context_manager.writer
 def provider_fw_rule_destroy(context, rule_id):
-    session = get_session()
-    with session.begin():
-        session.query(models.ProviderFirewallRule).\
-                filter_by(id=rule_id).\
-                soft_delete()
+    context.session.query(models.ProviderFirewallRule).\
+        filter_by(id=rule_id).\
+        soft_delete()
 
 
 ###################
 
 
 @require_context
+@main_context_manager.writer
 def project_get_networks(context, project_id, associate=True):
     # NOTE(tr3buchet): as before this function will associate
     # a project with a network if it doesn't have one and
@@ -4539,11 +4549,12 @@ def migration_get_all_by_filters(context, filters):
 ##################
 
 
+@main_context_manager.writer
 def console_pool_create(context, values):
     pool = models.ConsolePool()
     pool.update(values)
     try:
-        pool.save()
+        pool.save(context.session)
     except db_exc.DBDuplicateEntry:
         raise exception.ConsolePoolExists(
             host=values["host"],
@@ -4553,6 +4564,7 @@ def console_pool_create(context, values):
     return pool
 
 
+@main_context_manager.reader
 def console_pool_get_by_host_type(context, compute_host, host,
                                   console_type):
 
@@ -4571,6 +4583,7 @@ def console_pool_get_by_host_type(context, compute_host, host,
     return result
 
 
+@main_context_manager.reader
 def console_pool_get_all_by_host_type(context, host, console_type):
     return model_query(context, models.ConsolePool, read_deleted="no").\
                    filter_by(host=host).\
@@ -4579,22 +4592,26 @@ def console_pool_get_all_by_host_type(context, host, console_type):
                    all()
 
 
+##################
+
+
+@main_context_manager.writer
 def console_create(context, values):
     console = models.Console()
     console.update(values)
-    console.save()
+    console.save(context.session)
     return console
 
 
+@main_context_manager.writer
 def console_delete(context, console_id):
-    session = get_session()
-    with session.begin():
-        # NOTE(mdragon): consoles are meant to be transient.
-        session.query(models.Console).\
-                filter_by(id=console_id).\
-                delete()
+    # NOTE(mdragon): consoles are meant to be transient.
+    context.session.query(models.Console).\
+        filter_by(id=console_id).\
+        delete()
 
 
+@main_context_manager.reader
 def console_get_by_pool_instance(context, pool_id, instance_uuid):
     result = model_query(context, models.Console, read_deleted="yes").\
                    filter_by(pool_id=pool_id).\
@@ -4609,6 +4626,7 @@ def console_get_by_pool_instance(context, pool_id, instance_uuid):
     return result
 
 
+@main_context_manager.reader
 def console_get_all_by_instance(context, instance_uuid, columns_to_join=None):
     query = model_query(context, models.Console, read_deleted="yes").\
                 filter_by(instance_uuid=instance_uuid)
@@ -4618,6 +4636,7 @@ def console_get_all_by_instance(context, instance_uuid, columns_to_join=None):
     return query.all()
 
 
+@main_context_manager.reader
 def console_get(context, console_id, instance_uuid=None):
     query = model_query(context, models.Console, read_deleted="yes").\
                     filter_by(id=console_id).\
@@ -4641,6 +4660,7 @@ def console_get(context, console_id, instance_uuid=None):
 ##################
 
 
+@main_context_manager.writer
 def flavor_create(context, values, projects=None):
     """Create a new instance type. In order to pass in extra specs,
     the values dict should contain a 'extra_specs' key/value pair:
@@ -4664,21 +4684,19 @@ def flavor_create(context, values, projects=None):
     if projects is None:
         projects = []
 
-    session = get_session()
-    with session.begin():
-        try:
-            instance_type_ref.save()
-        except db_exc.DBDuplicateEntry as e:
-            if 'flavorid' in e.columns:
-                raise exception.FlavorIdExists(flavor_id=values['flavorid'])
-            raise exception.FlavorExists(name=values['name'])
-        except Exception as e:
-            raise db_exc.DBError(e)
-        for project in set(projects):
-            access_ref = models.InstanceTypeProjects()
-            access_ref.update({"instance_type_id": instance_type_ref.id,
-                               "project_id": project})
-            access_ref.save()
+    try:
+        instance_type_ref.save(context.session)
+    except db_exc.DBDuplicateEntry as e:
+        if 'flavorid' in e.columns:
+            raise exception.FlavorIdExists(flavor_id=values['flavorid'])
+        raise exception.FlavorExists(name=values['name'])
+    except Exception as e:
+        raise db_exc.DBError(e)
+    for project in set(projects):
+        access_ref = models.InstanceTypeProjects()
+        access_ref.update({"instance_type_id": instance_type_ref.id,
+                           "project_id": project})
+        access_ref.save(context.session)
 
     return _dict_with_extra_specs(instance_type_ref)
 
@@ -4702,8 +4720,8 @@ def _dict_with_extra_specs(inst_type_query):
     return inst_type_dict
 
 
-def _flavor_get_query(context, session=None, read_deleted=None):
-    query = model_query(context, models.InstanceTypes, session=session,
+def _flavor_get_query(context, read_deleted=None):
+    query = model_query(context, models.InstanceTypes,
                        read_deleted=read_deleted).\
                        options(joinedload('extra_specs'))
     if not context.is_admin:
@@ -4716,6 +4734,7 @@ def _flavor_get_query(context, session=None, read_deleted=None):
 
 
 @require_context
+@main_context_manager.reader
 def flavor_get_all(context, inactive=False, filters=None,
                    sort_key='flavorid', sort_dir='asc', limit=None,
                    marker=None):
@@ -4773,23 +4792,22 @@ def flavor_get_all(context, inactive=False, filters=None,
     return [_dict_with_extra_specs(i) for i in inst_types]
 
 
-def _flavor_get_id_from_flavor_query(context, flavor_id, session=None):
+def _flavor_get_id_from_flavor_query(context, flavor_id):
     return model_query(context, models.InstanceTypes,
                        (models.InstanceTypes.id,),
-                       read_deleted="no", session=session).\
+                       read_deleted="no").\
                 filter_by(flavorid=flavor_id)
 
 
-def _flavor_get_id_from_flavor(context, flavor_id, session=None):
-    result = _flavor_get_id_from_flavor_query(context, flavor_id,
-                                                     session=session).\
-                    first()
+def _flavor_get_id_from_flavor(context, flavor_id):
+    result = _flavor_get_id_from_flavor_query(context, flavor_id).first()
     if not result:
         raise exception.FlavorNotFound(flavor_id=flavor_id)
     return result[0]
 
 
 @require_context
+@main_context_manager.reader
 def flavor_get(context, id):
     """Returns a dict describing specific flavor."""
     result = _flavor_get_query(context).\
@@ -4801,6 +4819,7 @@ def flavor_get(context, id):
 
 
 @require_context
+@main_context_manager.reader
 def flavor_get_by_name(context, name):
     """Returns a dict describing specific flavor."""
     result = _flavor_get_query(context).\
@@ -4812,6 +4831,7 @@ def flavor_get_by_name(context, name):
 
 
 @require_context
+@main_context_manager.reader
 def flavor_get_by_flavor_id(context, flavor_id, read_deleted):
     """Returns a dict describing specific flavor_id."""
     result = _flavor_get_query(context, read_deleted=read_deleted).\
@@ -4824,43 +4844,40 @@ def flavor_get_by_flavor_id(context, flavor_id, read_deleted):
     return _dict_with_extra_specs(result)
 
 
+@main_context_manager.writer
 def flavor_destroy(context, name):
     """Marks specific flavor as deleted."""
-    session = get_session()
-    with session.begin():
-        ref = model_query(context, models.InstanceTypes, session=session,
-                          read_deleted="no").\
-                    filter_by(name=name).\
-                    first()
-        if not ref:
-            raise exception.FlavorNotFoundByName(flavor_name=name)
+    ref = model_query(context, models.InstanceTypes, read_deleted="no").\
+                filter_by(name=name).\
+                first()
+    if not ref:
+        raise exception.FlavorNotFoundByName(flavor_name=name)
 
-        ref.soft_delete(session=session)
-        model_query(context, models.InstanceTypeExtraSpecs,
-                    session=session, read_deleted="no").\
-                filter_by(instance_type_id=ref['id']).\
-                soft_delete()
-        model_query(context, models.InstanceTypeProjects,
-                    session=session, read_deleted="no").\
-                filter_by(instance_type_id=ref['id']).\
-                soft_delete()
+    ref.soft_delete(context.session)
+    model_query(context, models.InstanceTypeExtraSpecs, read_deleted="no").\
+            filter_by(instance_type_id=ref['id']).\
+            soft_delete()
+    model_query(context, models.InstanceTypeProjects, read_deleted="no").\
+            filter_by(instance_type_id=ref['id']).\
+            soft_delete()
 
 
-def _flavor_access_query(context, session=None):
-    return model_query(context, models.InstanceTypeProjects, session=session,
-                       read_deleted="no")
+def _flavor_access_query(context):
+    return model_query(context, models.InstanceTypeProjects, read_deleted="no")
 
 
+@main_context_manager.reader
 def flavor_access_get_by_flavor_id(context, flavor_id):
     """Get flavor access list by flavor id."""
-    instance_type_id_subq = \
-            _flavor_get_id_from_flavor_query(context, flavor_id)
+    instance_type_id_subq = _flavor_get_id_from_flavor_query(context,
+                                                             flavor_id)
     access_refs = _flavor_access_query(context).\
                         filter_by(instance_type_id=instance_type_id_subq).\
                         all()
     return access_refs
 
 
+@main_context_manager.writer
 def flavor_access_add(context, flavor_id, project_id):
     """Add given tenant to the flavor access list."""
     instance_type_id = _flavor_get_id_from_flavor(context, flavor_id)
@@ -4869,13 +4886,14 @@ def flavor_access_add(context, flavor_id, project_id):
     access_ref.update({"instance_type_id": instance_type_id,
                        "project_id": project_id})
     try:
-        access_ref.save()
+        access_ref.save(context.session)
     except db_exc.DBDuplicateEntry:
         raise exception.FlavorAccessExists(flavor_id=flavor_id,
                                             project_id=project_id)
     return access_ref
 
 
+@main_context_manager.writer
 def flavor_access_remove(context, flavor_id, project_id):
     """Remove given tenant from the flavor access list."""
     instance_type_id = _flavor_get_id_from_flavor(context, flavor_id)
@@ -4889,22 +4907,24 @@ def flavor_access_remove(context, flavor_id, project_id):
                                              project_id=project_id)
 
 
-def _flavor_extra_specs_get_query(context, flavor_id, session=None):
-    instance_type_id_subq = \
-            _flavor_get_id_from_flavor_query(context, flavor_id)
+def _flavor_extra_specs_get_query(context, flavor_id):
+    instance_type_id_subq = _flavor_get_id_from_flavor_query(context,
+                                                             flavor_id)
 
-    return model_query(context, models.InstanceTypeExtraSpecs, session=session,
+    return model_query(context, models.InstanceTypeExtraSpecs,
                        read_deleted="no").\
                 filter_by(instance_type_id=instance_type_id_subq)
 
 
 @require_context
+@main_context_manager.reader
 def flavor_extra_specs_get(context, flavor_id):
     rows = _flavor_extra_specs_get_query(context, flavor_id).all()
     return {row['key']: row['value'] for row in rows}
 
 
 @require_context
+@main_context_manager.writer
 def flavor_extra_specs_delete(context, flavor_id, key):
     result = _flavor_extra_specs_get_query(context, flavor_id).\
                      filter(models.InstanceTypeExtraSpecs.key == key).\
@@ -4916,34 +4936,34 @@ def flavor_extra_specs_delete(context, flavor_id, key):
 
 
 @require_context
+@main_context_manager.writer
 def flavor_extra_specs_update_or_create(context, flavor_id, specs,
                                                max_retries=10):
     for attempt in range(max_retries):
         try:
-            session = get_session()
-            with session.begin():
-                instance_type_id = _flavor_get_id_from_flavor(context,
-                                                         flavor_id, session)
+            instance_type_id = _flavor_get_id_from_flavor(context, flavor_id)
 
-                spec_refs = model_query(context, models.InstanceTypeExtraSpecs,
-                                        session=session, read_deleted="no").\
-                  filter_by(instance_type_id=instance_type_id).\
-                  filter(models.InstanceTypeExtraSpecs.key.in_(specs.keys())).\
-                  all()
+            spec_refs = model_query(context, models.InstanceTypeExtraSpecs,
+                                    read_deleted="no").\
+              filter_by(instance_type_id=instance_type_id).\
+              filter(models.InstanceTypeExtraSpecs.key.in_(specs.keys())).\
+              all()
 
-                existing_keys = set()
-                for spec_ref in spec_refs:
-                    key = spec_ref["key"]
-                    existing_keys.add(key)
+            existing_keys = set()
+            for spec_ref in spec_refs:
+                key = spec_ref["key"]
+                existing_keys.add(key)
+                with main_context_manager.writer.savepoint.using(context):
                     spec_ref.update({"value": specs[key]})
 
-                for key, value in specs.items():
-                    if key in existing_keys:
-                        continue
-                    spec_ref = models.InstanceTypeExtraSpecs()
+            for key, value in specs.items():
+                if key in existing_keys:
+                    continue
+                spec_ref = models.InstanceTypeExtraSpecs()
+                with main_context_manager.writer.savepoint.using(context):
                     spec_ref.update({"key": key, "value": value,
                                      "instance_type_id": instance_type_id})
-                    session.add(spec_ref)
+                    context.session.add(spec_ref)
 
             return specs
         except db_exc.DBDuplicateEntry:
@@ -5009,13 +5029,13 @@ def _instance_metadata_get_multi(context, instance_uuids):
         models.InstanceMetadata.instance_uuid.in_(instance_uuids))
 
 
-def _instance_metadata_get_query(context, instance_uuid, session=None):
-    return model_query(context, models.InstanceMetadata, session=session,
-                       read_deleted="no").\
+def _instance_metadata_get_query(context, instance_uuid):
+    return model_query(context, models.InstanceMetadata, read_deleted="no").\
                     filter_by(instance_uuid=instance_uuid)
 
 
 @require_context
+@main_context_manager.reader
 def instance_metadata_get(context, instance_uuid):
     rows = _instance_metadata_get_query(context, instance_uuid).all()
     return {row['key']: row['value'] for row in rows}
@@ -5023,6 +5043,7 @@ def instance_metadata_get(context, instance_uuid):
 
 @require_context
 @oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True)
+@main_context_manager.writer
 def instance_metadata_delete(context, instance_uuid, key):
     _instance_metadata_get_query(context, instance_uuid).\
         filter_by(key=key).\
@@ -5031,34 +5052,31 @@ def instance_metadata_delete(context, instance_uuid, key):
 
 @require_context
 @oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True)
+@main_context_manager.writer
 def instance_metadata_update(context, instance_uuid, metadata, delete):
     all_keys = metadata.keys()
-    session = get_session()
-    with session.begin(subtransactions=True):
-        if delete:
-            _instance_metadata_get_query(context, instance_uuid,
-                                         session=session).\
-                filter(~models.InstanceMetadata.key.in_(all_keys)).\
-                soft_delete(synchronize_session=False)
+    if delete:
+        _instance_metadata_get_query(context, instance_uuid).\
+            filter(~models.InstanceMetadata.key.in_(all_keys)).\
+            soft_delete(synchronize_session=False)
 
-        already_existing_keys = []
-        meta_refs = _instance_metadata_get_query(context, instance_uuid,
-                                                 session=session).\
-            filter(models.InstanceMetadata.key.in_(all_keys)).\
-            all()
+    already_existing_keys = []
+    meta_refs = _instance_metadata_get_query(context, instance_uuid).\
+        filter(models.InstanceMetadata.key.in_(all_keys)).\
+        all()
 
-        for meta_ref in meta_refs:
-            already_existing_keys.append(meta_ref.key)
-            meta_ref.update({"value": metadata[meta_ref.key]})
+    for meta_ref in meta_refs:
+        already_existing_keys.append(meta_ref.key)
+        meta_ref.update({"value": metadata[meta_ref.key]})
 
-        new_keys = set(all_keys) - set(already_existing_keys)
-        for key in new_keys:
-            meta_ref = models.InstanceMetadata()
-            meta_ref.update({"key": key, "value": metadata[key],
-                             "instance_uuid": instance_uuid})
-            session.add(meta_ref)
+    new_keys = set(all_keys) - set(already_existing_keys)
+    for key in new_keys:
+        meta_ref = models.InstanceMetadata()
+        meta_ref.update({"key": key, "value": metadata[key],
+                         "instance_uuid": instance_uuid})
+        context.session.add(meta_ref)
 
-        return metadata
+    return metadata
 
 
 #######################
@@ -5073,47 +5091,44 @@ def _instance_system_metadata_get_multi(context, instance_uuids):
         models.InstanceSystemMetadata.instance_uuid.in_(instance_uuids))
 
 
-def _instance_system_metadata_get_query(context, instance_uuid, session=None):
-    return model_query(context, models.InstanceSystemMetadata,
-                       session=session).\
+def _instance_system_metadata_get_query(context, instance_uuid):
+    return model_query(context, models.InstanceSystemMetadata).\
                     filter_by(instance_uuid=instance_uuid)
 
 
 @require_context
+@main_context_manager.reader
 def instance_system_metadata_get(context, instance_uuid):
     rows = _instance_system_metadata_get_query(context, instance_uuid).all()
     return {row['key']: row['value'] for row in rows}
 
 
 @require_context
+@main_context_manager.writer
 def instance_system_metadata_update(context, instance_uuid, metadata, delete):
     all_keys = metadata.keys()
-    session = get_session()
-    with session.begin(subtransactions=True):
-        if delete:
-            _instance_system_metadata_get_query(context, instance_uuid,
-                                                session=session).\
-                filter(~models.InstanceSystemMetadata.key.in_(all_keys)).\
-                soft_delete(synchronize_session=False)
+    if delete:
+        _instance_system_metadata_get_query(context, instance_uuid).\
+            filter(~models.InstanceSystemMetadata.key.in_(all_keys)).\
+            soft_delete(synchronize_session=False)
 
-        already_existing_keys = []
-        meta_refs = _instance_system_metadata_get_query(context, instance_uuid,
-                                                        session=session).\
-            filter(models.InstanceSystemMetadata.key.in_(all_keys)).\
-            all()
+    already_existing_keys = []
+    meta_refs = _instance_system_metadata_get_query(context, instance_uuid).\
+        filter(models.InstanceSystemMetadata.key.in_(all_keys)).\
+        all()
 
-        for meta_ref in meta_refs:
-            already_existing_keys.append(meta_ref.key)
-            meta_ref.update({"value": metadata[meta_ref.key]})
+    for meta_ref in meta_refs:
+        already_existing_keys.append(meta_ref.key)
+        meta_ref.update({"value": metadata[meta_ref.key]})
 
-        new_keys = set(all_keys) - set(already_existing_keys)
-        for key in new_keys:
-            meta_ref = models.InstanceSystemMetadata()
-            meta_ref.update({"key": key, "value": metadata[key],
-                             "instance_uuid": instance_uuid})
-            session.add(meta_ref)
+    new_keys = set(all_keys) - set(already_existing_keys)
+    for key in new_keys:
+        meta_ref = models.InstanceSystemMetadata()
+        meta_ref.update({"key": key, "value": metadata[key],
+                         "instance_uuid": instance_uuid})
+        context.session.add(meta_ref)
 
-        return metadata
+    return metadata
 
 
 ####################
@@ -5171,11 +5186,11 @@ def agent_build_update(context, agent_build_id, values):
 ####################
 
 @require_context
-def bw_usage_get(context, uuid, start_period, mac, use_slave=False):
+@main_context_manager.reader.allow_async
+def bw_usage_get(context, uuid, start_period, mac):
     values = {'start_period': start_period}
     values = convert_objects_related_datetimes(values, 'start_period')
-    return model_query(context, models.BandwidthUsage, read_deleted="yes",
-                       use_slave=use_slave).\
+    return model_query(context, models.BandwidthUsage, read_deleted="yes").\
                            filter_by(start_period=values['start_period']).\
                            filter_by(uuid=uuid).\
                            filter_by(mac=mac).\
@@ -5183,12 +5198,12 @@ def bw_usage_get(context, uuid, start_period, mac, use_slave=False):
 
 
 @require_context
-def bw_usage_get_by_uuids(context, uuids, start_period, use_slave=False):
+@main_context_manager.reader.allow_async
+def bw_usage_get_by_uuids(context, uuids, start_period):
     values = {'start_period': start_period}
     values = convert_objects_related_datetimes(values, 'start_period')
     return (
-        model_query(context, models.BandwidthUsage, read_deleted="yes",
-                    use_slave=use_slave).
+        model_query(context, models.BandwidthUsage, read_deleted="yes").
         filter(models.BandwidthUsage.uuid.in_(uuids)).
         filter_by(start_period=values['start_period']).
         all()
@@ -5197,10 +5212,9 @@ def bw_usage_get_by_uuids(context, uuids, start_period, use_slave=False):
 
 @require_context
 @oslo_db_api.wrap_db_retry(max_retries=5, retry_on_deadlock=True)
+@main_context_manager.writer
 def bw_usage_update(context, uuid, mac, start_period, bw_in, bw_out,
                     last_ctr_in, last_ctr_out, last_refreshed=None):
-
-    session = get_session()
 
     if last_refreshed is None:
         last_refreshed = timeutils.utcnow()
@@ -5208,48 +5222,48 @@ def bw_usage_update(context, uuid, mac, start_period, bw_in, bw_out,
     # NOTE(comstud): More often than not, we'll be updating records vs
     # creating records.  Optimize accordingly, trying to update existing
     # records.  Fall back to creation when no rows are updated.
-    with session.begin():
-        ts_values = {'last_refreshed': last_refreshed,
-                     'start_period': start_period}
-        ts_keys = ('start_period', 'last_refreshed')
-        ts_values = convert_objects_related_datetimes(ts_values, *ts_keys)
-        values = {'last_refreshed': ts_values['last_refreshed'],
-                  'last_ctr_in': last_ctr_in,
-                  'last_ctr_out': last_ctr_out,
-                  'bw_in': bw_in,
-                  'bw_out': bw_out}
-        bw_usage = model_query(context, models.BandwidthUsage, session=session,
-                read_deleted='yes').\
-                        filter_by(start_period=ts_values['start_period']).\
-                        filter_by(uuid=uuid).\
-                        filter_by(mac=mac).first()
+    ts_values = {'last_refreshed': last_refreshed,
+                 'start_period': start_period}
+    ts_keys = ('start_period', 'last_refreshed')
+    ts_values = convert_objects_related_datetimes(ts_values, *ts_keys)
+    values = {'last_refreshed': ts_values['last_refreshed'],
+              'last_ctr_in': last_ctr_in,
+              'last_ctr_out': last_ctr_out,
+              'bw_in': bw_in,
+              'bw_out': bw_out}
+    bw_usage = model_query(context, models.BandwidthUsage,
+            read_deleted='yes').\
+                    filter_by(start_period=ts_values['start_period']).\
+                    filter_by(uuid=uuid).\
+                    filter_by(mac=mac).first()
 
-        if bw_usage:
-            bw_usage.update(values)
-            return bw_usage
+    if bw_usage:
+        bw_usage.update(values)
+        return bw_usage
 
-        bwusage = models.BandwidthUsage()
-        bwusage.start_period = ts_values['start_period']
-        bwusage.uuid = uuid
-        bwusage.mac = mac
-        bwusage.last_refreshed = ts_values['last_refreshed']
-        bwusage.bw_in = bw_in
-        bwusage.bw_out = bw_out
-        bwusage.last_ctr_in = last_ctr_in
-        bwusage.last_ctr_out = last_ctr_out
-        try:
-            bwusage.save(session=session)
-        except db_exc.DBDuplicateEntry:
-            # NOTE(sirp): Possible race if two greenthreads attempt to create
-            # the usage entry at the same time. First one wins.
-            pass
-        return bwusage
+    bwusage = models.BandwidthUsage()
+    bwusage.start_period = ts_values['start_period']
+    bwusage.uuid = uuid
+    bwusage.mac = mac
+    bwusage.last_refreshed = ts_values['last_refreshed']
+    bwusage.bw_in = bw_in
+    bwusage.bw_out = bw_out
+    bwusage.last_ctr_in = last_ctr_in
+    bwusage.last_ctr_out = last_ctr_out
+    try:
+        bwusage.save(context.session)
+    except db_exc.DBDuplicateEntry:
+        # NOTE(sirp): Possible race if two greenthreads attempt to create
+        # the usage entry at the same time. First one wins.
+        pass
+    return bwusage
 
 
 ####################
 
 
 @require_context
+@main_context_manager.reader
 def vol_get_usage_by_time(context, begin):
     """Return volumes usage that have been updated after a specified time."""
     return model_query(context, models.VolumeUsage, read_deleted="yes").\
@@ -5257,119 +5271,118 @@ def vol_get_usage_by_time(context, begin):
                               models.VolumeUsage.tot_last_refreshed > begin,
                               models.VolumeUsage.curr_last_refreshed == null(),
                               models.VolumeUsage.curr_last_refreshed > begin,
-                              )).\
-                              all()
+                              )).all()
 
 
 @require_context
+@main_context_manager.writer
 def vol_usage_update(context, id, rd_req, rd_bytes, wr_req, wr_bytes,
                      instance_id, project_id, user_id, availability_zone,
                      update_totals=False):
-    session = get_session()
 
     refreshed = timeutils.utcnow()
 
-    with session.begin():
-        values = {}
-        # NOTE(dricco): We will be mostly updating current usage records vs
-        # updating total or creating records. Optimize accordingly.
-        if not update_totals:
-            values = {'curr_last_refreshed': refreshed,
-                      'curr_reads': rd_req,
-                      'curr_read_bytes': rd_bytes,
-                      'curr_writes': wr_req,
-                      'curr_write_bytes': wr_bytes,
-                      'instance_uuid': instance_id,
-                      'project_id': project_id,
-                      'user_id': user_id,
-                      'availability_zone': availability_zone}
-        else:
-            values = {'tot_last_refreshed': refreshed,
-                      'tot_reads': models.VolumeUsage.tot_reads + rd_req,
-                      'tot_read_bytes': models.VolumeUsage.tot_read_bytes +
-                                        rd_bytes,
-                      'tot_writes': models.VolumeUsage.tot_writes + wr_req,
-                      'tot_write_bytes': models.VolumeUsage.tot_write_bytes +
-                                         wr_bytes,
-                      'curr_reads': 0,
-                      'curr_read_bytes': 0,
-                      'curr_writes': 0,
-                      'curr_write_bytes': 0,
-                      'instance_uuid': instance_id,
-                      'project_id': project_id,
-                      'user_id': user_id,
-                      'availability_zone': availability_zone}
+    values = {}
+    # NOTE(dricco): We will be mostly updating current usage records vs
+    # updating total or creating records. Optimize accordingly.
+    if not update_totals:
+        values = {'curr_last_refreshed': refreshed,
+                  'curr_reads': rd_req,
+                  'curr_read_bytes': rd_bytes,
+                  'curr_writes': wr_req,
+                  'curr_write_bytes': wr_bytes,
+                  'instance_uuid': instance_id,
+                  'project_id': project_id,
+                  'user_id': user_id,
+                  'availability_zone': availability_zone}
+    else:
+        values = {'tot_last_refreshed': refreshed,
+                  'tot_reads': models.VolumeUsage.tot_reads + rd_req,
+                  'tot_read_bytes': models.VolumeUsage.tot_read_bytes +
+                                    rd_bytes,
+                  'tot_writes': models.VolumeUsage.tot_writes + wr_req,
+                  'tot_write_bytes': models.VolumeUsage.tot_write_bytes +
+                                     wr_bytes,
+                  'curr_reads': 0,
+                  'curr_read_bytes': 0,
+                  'curr_writes': 0,
+                  'curr_write_bytes': 0,
+                  'instance_uuid': instance_id,
+                  'project_id': project_id,
+                  'user_id': user_id,
+                  'availability_zone': availability_zone}
 
-        current_usage = model_query(context, models.VolumeUsage,
-                            session=session, read_deleted="yes").\
-                            filter_by(volume_id=id).\
-                            first()
-        if current_usage:
-            if (rd_req < current_usage['curr_reads'] or
-                rd_bytes < current_usage['curr_read_bytes'] or
-                wr_req < current_usage['curr_writes'] or
-                    wr_bytes < current_usage['curr_write_bytes']):
-                LOG.info(_LI("Volume(%s) has lower stats then what is in "
-                             "the database. Instance must have been rebooted "
-                             "or crashed. Updating totals."), id)
-                if not update_totals:
-                    values['tot_reads'] = (models.VolumeUsage.tot_reads +
-                                           current_usage['curr_reads'])
-                    values['tot_read_bytes'] = (
-                        models.VolumeUsage.tot_read_bytes +
-                        current_usage['curr_read_bytes'])
-                    values['tot_writes'] = (models.VolumeUsage.tot_writes +
-                                            current_usage['curr_writes'])
-                    values['tot_write_bytes'] = (
-                        models.VolumeUsage.tot_write_bytes +
-                        current_usage['curr_write_bytes'])
-                else:
-                    values['tot_reads'] = (models.VolumeUsage.tot_reads +
-                                           current_usage['curr_reads'] +
-                                           rd_req)
-                    values['tot_read_bytes'] = (
-                        models.VolumeUsage.tot_read_bytes +
-                        current_usage['curr_read_bytes'] + rd_bytes)
-                    values['tot_writes'] = (models.VolumeUsage.tot_writes +
-                                            current_usage['curr_writes'] +
-                                            wr_req)
-                    values['tot_write_bytes'] = (
-                        models.VolumeUsage.tot_write_bytes +
-                        current_usage['curr_write_bytes'] + wr_bytes)
+    current_usage = model_query(context, models.VolumeUsage,
+                        read_deleted="yes").\
+                        filter_by(volume_id=id).\
+                        first()
+    if current_usage:
+        if (rd_req < current_usage['curr_reads'] or
+            rd_bytes < current_usage['curr_read_bytes'] or
+            wr_req < current_usage['curr_writes'] or
+                wr_bytes < current_usage['curr_write_bytes']):
+            LOG.info(_LI("Volume(%s) has lower stats then what is in "
+                         "the database. Instance must have been rebooted "
+                         "or crashed. Updating totals."), id)
+            if not update_totals:
+                values['tot_reads'] = (models.VolumeUsage.tot_reads +
+                                       current_usage['curr_reads'])
+                values['tot_read_bytes'] = (
+                    models.VolumeUsage.tot_read_bytes +
+                    current_usage['curr_read_bytes'])
+                values['tot_writes'] = (models.VolumeUsage.tot_writes +
+                                        current_usage['curr_writes'])
+                values['tot_write_bytes'] = (
+                    models.VolumeUsage.tot_write_bytes +
+                    current_usage['curr_write_bytes'])
+            else:
+                values['tot_reads'] = (models.VolumeUsage.tot_reads +
+                                       current_usage['curr_reads'] +
+                                       rd_req)
+                values['tot_read_bytes'] = (
+                    models.VolumeUsage.tot_read_bytes +
+                    current_usage['curr_read_bytes'] + rd_bytes)
+                values['tot_writes'] = (models.VolumeUsage.tot_writes +
+                                        current_usage['curr_writes'] +
+                                        wr_req)
+                values['tot_write_bytes'] = (
+                    models.VolumeUsage.tot_write_bytes +
+                    current_usage['curr_write_bytes'] + wr_bytes)
 
-            current_usage.update(values)
-            current_usage.save(session=session)
-            session.refresh(current_usage)
-            return current_usage
+        current_usage.update(values)
+        current_usage.save(context.session)
+        context.session.refresh(current_usage)
+        return current_usage
 
-        vol_usage = models.VolumeUsage()
-        vol_usage.volume_id = id
-        vol_usage.instance_uuid = instance_id
-        vol_usage.project_id = project_id
-        vol_usage.user_id = user_id
-        vol_usage.availability_zone = availability_zone
+    vol_usage = models.VolumeUsage()
+    vol_usage.volume_id = id
+    vol_usage.instance_uuid = instance_id
+    vol_usage.project_id = project_id
+    vol_usage.user_id = user_id
+    vol_usage.availability_zone = availability_zone
 
-        if not update_totals:
-            vol_usage.curr_last_refreshed = refreshed
-            vol_usage.curr_reads = rd_req
-            vol_usage.curr_read_bytes = rd_bytes
-            vol_usage.curr_writes = wr_req
-            vol_usage.curr_write_bytes = wr_bytes
-        else:
-            vol_usage.tot_last_refreshed = refreshed
-            vol_usage.tot_reads = rd_req
-            vol_usage.tot_read_bytes = rd_bytes
-            vol_usage.tot_writes = wr_req
-            vol_usage.tot_write_bytes = wr_bytes
+    if not update_totals:
+        vol_usage.curr_last_refreshed = refreshed
+        vol_usage.curr_reads = rd_req
+        vol_usage.curr_read_bytes = rd_bytes
+        vol_usage.curr_writes = wr_req
+        vol_usage.curr_write_bytes = wr_bytes
+    else:
+        vol_usage.tot_last_refreshed = refreshed
+        vol_usage.tot_reads = rd_req
+        vol_usage.tot_read_bytes = rd_bytes
+        vol_usage.tot_writes = wr_req
+        vol_usage.tot_write_bytes = wr_bytes
 
-        vol_usage.save(session=session)
+    vol_usage.save(context.session)
 
-        return vol_usage
+    return vol_usage
 
 
 ####################
 
 
+@main_context_manager.reader
 def s3_image_get(context, image_id):
     """Find local s3 image represented by the provided id."""
     result = model_query(context, models.S3Image, read_deleted="yes").\
@@ -5382,6 +5395,7 @@ def s3_image_get(context, image_id):
     return result
 
 
+@main_context_manager.reader
 def s3_image_get_by_uuid(context, image_uuid):
     """Find local s3 image represented by the provided uuid."""
     result = model_query(context, models.S3Image, read_deleted="yes").\
@@ -5394,12 +5408,13 @@ def s3_image_get_by_uuid(context, image_uuid):
     return result
 
 
+@main_context_manager.writer
 def s3_image_create(context, image_uuid):
     """Create local s3 image represented by provided uuid."""
     try:
         s3_image_ref = models.S3Image()
         s3_image_ref.update({'uuid': image_uuid})
-        s3_image_ref.save()
+        s3_image_ref.save(context.session)
     except Exception as e:
         raise db_exc.DBError(e)
 
@@ -6392,6 +6407,7 @@ def pci_device_get_all_by_node(context, node_id):
                        all()
 
 
+@main_context_manager.reader
 def pci_device_get_all_by_parent_addr(context, node_id, parent_addr):
     return model_query(context, models.PciDevice).\
                        filter_by(compute_node_id=node_id).\
@@ -6442,17 +6458,16 @@ def pci_device_update(context, node_id, address, values):
 ####################
 
 
+@main_context_manager.writer
 def instance_tag_add(context, instance_uuid, tag):
-    session = get_session()
-
     tag_ref = models.Tag()
     tag_ref.resource_id = instance_uuid
     tag_ref.tag = tag
 
     try:
-        with session.begin(subtransactions=True):
-            _check_instance_exists_in_project(context, session, instance_uuid)
-            session.add(tag_ref)
+        _check_instance_exists_in_project(context, instance_uuid)
+        with main_context_manager.writer.savepoint.using(context):
+            context.session.add(tag_ref)
     except db_exc.DBDuplicateEntry:
         # NOTE(snikitin): We should ignore tags duplicates
         pass
@@ -6460,70 +6475,61 @@ def instance_tag_add(context, instance_uuid, tag):
     return tag_ref
 
 
+@main_context_manager.writer
 def instance_tag_set(context, instance_uuid, tags):
-    session = get_session()
+    _check_instance_exists_in_project(context, instance_uuid)
 
-    with session.begin(subtransactions=True):
-        _check_instance_exists_in_project(context, session, instance_uuid)
+    existing = context.session.query(models.Tag.tag).filter_by(
+        resource_id=instance_uuid).all()
 
-        existing = session.query(models.Tag.tag).filter_by(
-            resource_id=instance_uuid).all()
+    existing = set(row.tag for row in existing)
+    tags = set(tags)
+    to_delete = existing - tags
+    to_add = tags - existing
 
-        existing = set(row.tag for row in existing)
-        tags = set(tags)
-        to_delete = existing - tags
-        to_add = tags - existing
+    if to_delete:
+        context.session.query(models.Tag).filter_by(
+            resource_id=instance_uuid).filter(
+            models.Tag.tag.in_(to_delete)).delete(
+            synchronize_session=False)
 
-        if to_delete:
-            session.query(models.Tag).filter_by(
-                resource_id=instance_uuid).filter(
-                models.Tag.tag.in_(to_delete)).delete(
-                synchronize_session=False)
+    if to_add:
+        data = [
+            {'resource_id': instance_uuid, 'tag': tag} for tag in to_add]
+        context.session.execute(models.Tag.__table__.insert(), data)
 
-        if to_add:
-            data = [
-                {'resource_id': instance_uuid, 'tag': tag} for tag in to_add]
-            session.execute(models.Tag.__table__.insert(), data)
-
-        return session.query(models.Tag).filter_by(
-            resource_id=instance_uuid).all()
+    return context.session.query(models.Tag).filter_by(
+        resource_id=instance_uuid).all()
 
 
+@main_context_manager.reader
 def instance_tag_get_by_instance_uuid(context, instance_uuid):
-    session = get_session()
-
-    with session.begin(subtransactions=True):
-        _check_instance_exists_in_project(context, session, instance_uuid)
-        return session.query(models.Tag).filter_by(
-            resource_id=instance_uuid).all()
+    _check_instance_exists_in_project(context, instance_uuid)
+    return context.session.query(models.Tag).filter_by(
+        resource_id=instance_uuid).all()
 
 
+@main_context_manager.writer
 def instance_tag_delete(context, instance_uuid, tag):
-    session = get_session()
+    _check_instance_exists_in_project(context, instance_uuid)
+    result = context.session.query(models.Tag).filter_by(
+        resource_id=instance_uuid, tag=tag).delete()
 
-    with session.begin(subtransactions=True):
-        _check_instance_exists_in_project(context, session, instance_uuid)
-        result = session.query(models.Tag).filter_by(
-            resource_id=instance_uuid, tag=tag).delete()
-
-        if not result:
-            raise exception.InstanceTagNotFound(instance_id=instance_uuid,
-                                                tag=tag)
+    if not result:
+        raise exception.InstanceTagNotFound(instance_id=instance_uuid,
+                                            tag=tag)
 
 
+@main_context_manager.writer
 def instance_tag_delete_all(context, instance_uuid):
-    session = get_session()
-
-    with session.begin(subtransactions=True):
-        _check_instance_exists_in_project(context, session, instance_uuid)
-        session.query(models.Tag).filter_by(resource_id=instance_uuid).delete()
+    _check_instance_exists_in_project(context, instance_uuid)
+    context.session.query(models.Tag).filter_by(
+        resource_id=instance_uuid).delete()
 
 
+@main_context_manager.reader
 def instance_tag_exists(context, instance_uuid, tag):
-    session = get_session()
-
-    with session.begin(subtransactions=True):
-        _check_instance_exists_in_project(context, session, instance_uuid)
-        q = session.query(models.Tag).filter_by(
-            resource_id=instance_uuid, tag=tag)
-        return session.query(q.exists()).scalar()
+    _check_instance_exists_in_project(context, instance_uuid)
+    q = context.session.query(models.Tag).filter_by(
+        resource_id=instance_uuid, tag=tag)
+    return context.session.query(q.exists()).scalar()
