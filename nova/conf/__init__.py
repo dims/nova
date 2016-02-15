@@ -25,12 +25,12 @@ from oslo_config import cfg
 # from nova.conf import aws
 # from nova.conf import barbican
 # from nova.conf import base
-# from nova.conf import cells
+from nova.conf import cells
 from nova.conf import cert
 # from nova.conf import cinder
 # from nova.conf import cloudpipe
 from nova.conf import compute
-# from nova.conf import conductor
+from nova.conf import conductor
 # from nova.conf import configdrive
 # from nova.conf import console
 # from nova.conf import cors
@@ -72,7 +72,7 @@ from nova.conf import virt
 from nova.conf import vnc
 # from nova.conf import volume
 # from nova.conf import workarounds
-# from nova.conf import wsgi
+from nova.conf import wsgi
 # from nova.conf import xenserver
 # from nova.conf import xvp
 # from nova.conf import zookeeper
@@ -85,12 +85,12 @@ CONF = cfg.CONF
 # aws.register_opts(CONF)
 # barbican.register_opts(CONF)
 # base.register_opts(CONF)
-# cells.register_opts(CONF)
+cells.register_opts(CONF)
 cert.register_opts(CONF)
 # cinder.register_opts(CONF)
 # cloudpipe.register_opts(CONF)
 compute.register_opts(CONF)
-# conductor.register_opts(CONF)
+conductor.register_opts(CONF)
 # configdrive.register_opts(CONF)
 # console.register_opts(CONF)
 # cors.register_opts(CONF)
@@ -132,7 +132,7 @@ virt.register_opts(CONF)
 vnc.register_opts(CONF)
 # volume.register_opts(CONF)
 # workarounds.register_opts(CONF)
-# wsgi.register_opts(CONF)
+wsgi.register_opts(CONF)
 # xenserver.register_opts(CONF)
 # xvp.register_opts(CONF)
 # zookeeper.register_opts(CONF)

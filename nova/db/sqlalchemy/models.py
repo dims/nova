@@ -72,14 +72,6 @@ class NovaBase(models.TimestampMixin,
         session.expunge(copy)
         return copy
 
-    def save(self, session=None):
-        from nova.db.sqlalchemy import api
-
-        if session is None:
-            session = api.get_session()
-
-        super(NovaBase, self).save(session=session)
-
 
 class Service(BASE, NovaBase, models.SoftDeleteMixin):
     """Represents a running service on a host."""
@@ -131,6 +123,7 @@ class ComputeNode(BASE, NovaBase, models.SoftDeleteMixin):
     # This field has to be set non-nullable in a later cycle (probably Lxxx)
     # once we are sure that all compute nodes in production report it.
     host = Column(String(255), nullable=True)
+    uuid = Column(String(36), nullable=True)
     vcpus = Column(Integer, nullable=False)
     memory_mb = Column(Integer, nullable=False)
     local_gb = Column(Integer, nullable=False)
@@ -1439,3 +1432,63 @@ class Tag(BASE, models.ModelBase):
                     'Instance.deleted == 0)',
         foreign_keys=resource_id
     )
+
+
+class ResourceProvider(BASE, models.ModelBase):
+    """Represents a mapping to a providers of resources."""
+
+    __tablename__ = "resource_providers"
+    __table_args__ = (
+        Index('resource_providers_uuid_idx', 'uuid'),
+        schema.UniqueConstraint('uuid',
+            name='uniq_resource_providers0uuid'),
+        )
+
+    id = Column(Integer, primary_key=True, nullable=False)
+    uuid = Column(String(36), nullable=False)
+
+
+class Inventory(BASE, models.ModelBase):
+    """Represents a quantity of available resource."""
+
+    __tablename__ = "inventories"
+    __table_args__ = (
+        Index('inventories_resource_provider_id_idx',
+              'resource_provider_id'),
+        Index('inventories_resource_class_id_idx',
+              'resource_class_id'),
+    )
+
+    id = Column(Integer, primary_key=True, nullable=False)
+    resource_provider_id = Column(Integer, nullable=False)
+    resource_class_id = Column(Integer, nullable=False)
+    total = Column(Integer, nullable=False)
+    reserved = Column(Integer, nullable=False)
+    min_unit = Column(Integer, nullable=False)
+    max_unit = Column(Integer, nullable=False)
+    step_size = Column(Integer, nullable=False)
+    allocation_ratio = Column(Float, nullable=False)
+    resource_provider = orm.relationship(
+        "ResourceProvider",
+        primaryjoin=('and_(Inventory.resource_provider_id == '
+                     'ResourceProvider.id)'),
+        foreign_keys=resource_provider_id)
+
+
+class Allocation(BASE, models.ModelBase):
+    """A use of inventory."""
+
+    __tablename__ = "allocations"
+    __table_args__ = (
+        Index('allocations_resource_provider_class_id_idx',
+              'resource_provider_id', 'resource_class_id'),
+        Index('allocations_resource_class_id_idx',
+              'resource_class_id'),
+        Index('allocations_consumer_id_idx', 'consumer_id')
+    )
+
+    id = Column(Integer, primary_key=True, nullable=False)
+    resource_provider_id = Column(Integer, nullable=False)
+    consumer_id = Column(String(36), nullable=False)
+    resource_class_id = Column(Integer, nullable=False)
+    used = Column(Integer, nullable=False)

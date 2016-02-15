@@ -66,6 +66,7 @@ from nova.compute import power_state
 from nova.compute import task_states
 from nova.compute import utils as compute_utils
 from nova.compute import vm_mode
+import nova.conf
 from nova.console import serial as serial_console
 from nova.console import type as ctype
 from nova import context as nova_context
@@ -310,11 +311,10 @@ libvirt_opts = [
                'kernel (usually 1-99)')
     ]
 
-CONF = cfg.CONF
+CONF = nova.conf.CONF
 CONF.register_opts(libvirt_opts, 'libvirt')
 CONF.import_opt('host', 'nova.netconf')
 CONF.import_opt('my_ip', 'nova.netconf')
-CONF.import_opt('use_cow_images', 'nova.virt.driver')
 CONF.import_opt('enabled', 'nova.compute.api',
                 group='ephemeral_storage_encryption')
 CONF.import_opt('cipher', 'nova.compute.api',
@@ -325,8 +325,6 @@ CONF.import_opt('live_migration_retry_count', 'nova.compute.manager')
 CONF.import_opt('vncserver_proxyclient_address', 'nova.vnc', group='vnc')
 CONF.import_opt('server_proxyclient_address', 'nova.spice', group='spice')
 CONF.import_opt('vcpu_pin_set', 'nova.conf.virt')
-CONF.import_opt('vif_plugging_is_fatal', 'nova.virt.driver')
-CONF.import_opt('vif_plugging_timeout', 'nova.virt.driver')
 CONF.import_opt('hw_disk_discard', 'nova.virt.libvirt.imagebackend',
                 group='libvirt')
 CONF.import_group('workarounds', 'nova.utils')
@@ -425,6 +423,9 @@ MIN_LIBVIRT_BLOCKJOBINFO_VERSION = (1, 1, 1)
 # Relative block commit & rebase (feature is detected,
 # this version is only used for messaging)
 MIN_LIBVIRT_BLOCKJOB_RELATIVE_VERSION = (1, 2, 7)
+# Libvirt version 1.2.17 is required for successfull block live migration
+# of vm booted from image with attached devices
+MIN_LIBVIRT_BLOCK_LM_WITH_VOLUMES_VERSION = (1, 2, 17)
 # libvirt discard feature
 MIN_LIBVIRT_DISCARD_VERSION = (1, 0, 6)
 MIN_QEMU_DISCARD_VERSION = (1, 6, 0)
@@ -1822,10 +1823,15 @@ class LibvirtDriver(driver.ComputeDriver):
         libvirt_utils.create_cow_image(src_back_path, disk_delta,
                                        src_disk_size)
 
-        require_quiesce = image_meta.properties.get(
-            'os_require_quiesce', False)
-        if require_quiesce:
-            self.quiesce(context, instance, image_meta)
+        quiesced = False
+        try:
+            self._set_quiesced(context, instance, image_meta, True)
+            quiesced = True
+        except exception.NovaException as err:
+            if image_meta.properties.get('os_require_quiesce', False):
+                raise
+            LOG.info(_LI('Skipping quiescing instance: %(reason)s.'),
+                     {'reason': err}, instance=instance)
 
         try:
             # NOTE (rmk): blockRebase cannot be executed on persistent
@@ -1846,8 +1852,8 @@ class LibvirtDriver(driver.ComputeDriver):
             libvirt_utils.chown(disk_delta, os.getuid())
         finally:
             self._host.write_instance_config(xml)
-            if require_quiesce:
-                self.unquiesce(context, instance, image_meta)
+            if quiesced:
+                self._set_quiesced(context, instance, image_meta, False)
 
         # Convert the delta (CoW) image with a backing file to a flat
         # image with no backing file.
@@ -2923,18 +2929,11 @@ class LibvirtDriver(driver.ComputeDriver):
         return hasDirectIO
 
     @staticmethod
-    def _create_local(target, local_size, unit='G',
-                      fs_format=None, label=None):
-        """Create a blank image of specified size."""
-
-        libvirt_utils.create_image('raw', target,
-                                    '%d%c' % (local_size, unit))
-
-    def _create_ephemeral(self, target, ephemeral_size,
+    def _create_ephemeral(target, ephemeral_size,
                           fs_label, os_type, is_block_dev=False,
                           max_size=None, context=None, specified_fs=None):
         if not is_block_dev:
-            self._create_local(target, ephemeral_size)
+            libvirt_utils.create_image('raw', target, '%dG' % ephemeral_size)
 
         # Run as root only for block devices.
         disk.mkfs(os_type, fs_label, target, run_as_root=is_block_dev,
@@ -5512,18 +5511,27 @@ class LibvirtDriver(driver.ComputeDriver):
                                     block_device_info)
             if block_device_info:
                 bdm = block_device_info.get('block_device_mapping')
-                # NOTE(stpierre): if this instance has mapped volumes,
-                # we can't do a block migration, since that will
-                # result in volumes being copied from themselves to
-                # themselves, which is a recipe for disaster.
-                if bdm and len(bdm):
-                    LOG.error(_LE('Cannot block migrate instance %s with '
-                                  'mapped volumes'),
-                              instance.uuid, instance=instance)
-                    msg = (_('Cannot block migrate instance %s with mapped '
-                             'volumes') % instance.uuid)
+                # NOTE(pkoniszewski): libvirt from version 1.2.17 upwards
+                # supports selective block device migration. It means that it
+                # is possible to define subset of block devices to be copied
+                # during migration. If they are not specified - block devices
+                # won't be migrated. However, it does not work when live
+                # migration is tunnelled through libvirt.
+                if bdm and not self._host.has_min_version(
+                        MIN_LIBVIRT_BLOCK_LM_WITH_VOLUMES_VERSION):
+                    # NOTE(stpierre): if this instance has mapped volumes,
+                    # we can't do a block migration, since that will result
+                    # in volumes being copied from themselves to themselves,
+                    # which is a recipe for disaster.
+                    ver = ".".join([str(x) for x in
+                                    MIN_LIBVIRT_BLOCK_LM_WITH_VOLUMES_VERSION])
+                    msg = (_('Cannot block migrate instance %(uuid)s with'
+                             ' mapped volumes. Selective block device'
+                             ' migration feature requires libvirt version'
+                             ' %(libvirt_ver)s') %
+                           {'uuid': instance.uuid, 'libvirt_ver': ver})
+                    LOG.error(msg, instance=instance)
                     raise exception.MigrationPreCheckError(reason=msg)
-
         elif not (dest_check_data.is_shared_block_storage or
                   dest_check_data.is_shared_instance_path or
                   (booted_from_volume and not has_local_disk)):
@@ -5901,7 +5909,8 @@ class LibvirtDriver(driver.ComputeDriver):
             raise exception.MigrationError(reason=msg)
 
     def _live_migration_operation(self, context, instance, dest,
-                                  block_migration, migrate_data, dom):
+                                  block_migration, migrate_data, dom,
+                                  device_names):
         """Invoke the live migration operation
 
         :param context: security context
@@ -5912,6 +5921,8 @@ class LibvirtDriver(driver.ComputeDriver):
         :param block_migration: if true, do block migration.
         :param migrate_data: a LibvirtLiveMigrateData object
         :param dom: the libvirt domain object
+        :param device_names: list of device names that are being migrated with
+            instance
 
         This method is intended to be run in a background thread and will
         block that thread until the migration is finished or failed.
@@ -5956,12 +5967,25 @@ class LibvirtDriver(driver.ComputeDriver):
                                                listen_addrs,
                                                serial_listen_addr)
                 try:
-                    dom.migrateToURI2(CONF.libvirt.live_migration_uri % dest,
-                                      None,
-                                      new_xml_str,
-                                      migration_flags,
-                                      None,
-                                      CONF.libvirt.live_migration_bandwidth)
+                    if self._host.has_min_version(
+                            MIN_LIBVIRT_BLOCK_LM_WITH_VOLUMES_VERSION):
+                        params = {
+                            'bandwidth': CONF.libvirt.live_migration_bandwidth,
+                            'destination_xml': new_xml_str,
+                            'migrate_disks': device_names,
+                        }
+                        dom.migrateToURI3(
+                            CONF.libvirt.live_migration_uri % dest,
+                            params,
+                            migration_flags)
+                    else:
+                        dom.migrateToURI2(
+                            CONF.libvirt.live_migration_uri % dest,
+                            None,
+                            new_xml_str,
+                            migration_flags,
+                            None,
+                            CONF.libvirt.live_migration_bandwidth)
                 except libvirt.libvirtError as ex:
                     # NOTE(mriedem): There is a bug in older versions of
                     # libvirt where the VIR_DOMAIN_XML_MIGRATABLE flag causes
@@ -6086,37 +6110,48 @@ class LibvirtDriver(driver.ComputeDriver):
         for i in range(steps + 1):
             yield (int(delay * i), int(offset + base ** i))
 
-    def _live_migration_copy_disk_paths(self, guest):
+    def _live_migration_copy_disk_paths(self, context, instance, guest):
         '''Get list of disks to copy during migration
 
+        :param context: security context
+        :param instance: the instance being migrated
         :param guest: the Guest instance being migrated
 
         Get the list of disks to copy during migration.
 
-        :returns: a list of local disk paths to copy
+        :returns: a list of local source paths and a list of device names to
+            copy
         '''
 
-        disks = []
+        disk_paths = []
+        device_names = []
+        block_devices = []
+
+        # TODO(pkoniszewski): Remove this if-statement when we bump min libvirt
+        # version to >= 1.2.17
+        if self._host.has_min_version(
+                MIN_LIBVIRT_BLOCK_LM_WITH_VOLUMES_VERSION):
+            bdm_list = objects.BlockDeviceMappingList.get_by_instance_uuid(
+                context, instance.uuid)
+            block_device_info = driver.get_block_device_info(instance,
+                                                             bdm_list)
+
+            block_device_mappings = driver.block_device_info_get_mapping(
+                block_device_info)
+            for bdm in block_device_mappings:
+                device_name = str(bdm['mount_device'].rsplit('/', 1)[1])
+                block_devices.append(device_name)
+
         for dev in guest.get_all_disks():
-            # TODO(berrange) This is following the current
-            # (stupid) default logic in libvirt for selecting
-            # which disks are copied. In the future, when we
-            # can use a libvirt which accepts a list of disks
-            # to copy, we will need to adjust this to use a
-            # different rule.
-            #
-            # Our future goal is that a disk needs to be copied
-            # if it is a non-cinder volume which is not backed
-            # by shared storage. eg it may be an LVM block dev,
-            # or a raw/qcow2 file on a local filesystem. We
-            # never want to copy disks on NFS, or RBD or any
-            # cinder volume
             if dev.readonly or dev.shareable:
                 continue
             if dev.source_type not in ["file", "block"]:
                 continue
-            disks.append(dev.source_path)
-        return disks
+            if dev.target_dev in block_devices:
+                continue
+            disk_paths.append(dev.source_path)
+            device_names.append(dev.target_dev)
+        return (disk_paths, device_names)
 
     def _live_migration_data_gb(self, instance, disk_paths):
         '''Calculate total amount of data to be transferred
@@ -6374,8 +6409,10 @@ class LibvirtDriver(driver.ComputeDriver):
         guest = self._host.get_guest(instance)
 
         disk_paths = []
+        device_names = []
         if block_migration:
-            disk_paths = self._live_migration_copy_disk_paths(guest)
+            disk_paths, device_names = self._live_migration_copy_disk_paths(
+                context, instance, guest)
 
         # TODO(sahid): We are converting all calls from a
         # virDomain object to use nova.virt.libvirt.Guest.
@@ -6385,7 +6422,8 @@ class LibvirtDriver(driver.ComputeDriver):
         opthread = utils.spawn(self._live_migration_operation,
                                      context, instance, dest,
                                      block_migration,
-                                     migrate_data, dom)
+                                     migrate_data, dom,
+                                     device_names)
 
         finish_event = eventlet.event.Event()
 
@@ -6412,6 +6450,12 @@ class LibvirtDriver(driver.ComputeDriver):
         finally:
             LOG.debug("Live migration monitoring is all done",
                       instance=instance)
+
+    def live_migration_force_complete(self, instance):
+        # NOTE(pkoniszewski): currently only pause during live migration is
+        # supported to force live migration to complete, so just try to pause
+        # the instance
+        self.pause(instance)
 
     def _try_fetch_image(self, context, path, image_id, instance,
                          fallback_from_host=None):
@@ -6533,20 +6577,21 @@ class LibvirtDriver(driver.ComputeDriver):
                     context, instance, instance_dir, disk_info,
                     fallback_from_host=instance.host)
 
-        if not (is_block_migration or is_shared_instance_path):
-            # NOTE(angdraug): when block storage is shared between source and
-            # destination and instance path isn't (e.g. volume backed or rbd
-            # backed instance), instance path on destination has to be prepared
+            if not is_block_migration:
+                # NOTE(angdraug): when block storage is shared between source
+                # and destination and instance path isn't (e.g. volume backed
+                # or rbd backed instance), instance path on destination has to
+                # be prepared
 
-            # Touch the console.log file, required by libvirt.
-            console_file = self._get_console_log_path(instance)
-            LOG.debug('Touch instance console log: %s', console_file,
-                      instance=instance)
-            libvirt_utils.file_open(console_file, 'a').close()
+                # Touch the console.log file, required by libvirt.
+                console_file = self._get_console_log_path(instance)
+                LOG.debug('Touch instance console log: %s', console_file,
+                          instance=instance)
+                libvirt_utils.file_open(console_file, 'a').close()
 
-            # if image has kernel and ramdisk, just download
-            # following normal way.
-            self._fetch_instance_kernel_ramdisk(context, instance)
+                # if image has kernel and ramdisk, just download
+                # following normal way.
+                self._fetch_instance_kernel_ramdisk(context, instance)
 
         # Establishing connection to volume server.
         block_device_mapping = driver.block_device_info_get_mapping(

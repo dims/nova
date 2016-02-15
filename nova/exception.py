@@ -843,6 +843,12 @@ class PortNotUsable(Invalid):
     msg_fmt = _("Port %(port_id)s not usable for instance %(instance)s.")
 
 
+class PortNotUsableDNS(Invalid):
+    msg_fmt = _("Port %(port_id)s not usable for instance %(instance)s. "
+                "Value %(value)s assigned to dns_name attribute does not "
+                "match instance's hostname %(hostname)s")
+
+
 class PortNotFree(Invalid):
     msg_fmt = _("No free port available for instance %(instance)s.")
 
@@ -1120,6 +1126,17 @@ class MigrationNotFound(NotFound):
 class MigrationNotFoundByStatus(MigrationNotFound):
     msg_fmt = _("Migration not found for instance %(instance_id)s "
                 "with status %(status)s.")
+
+
+class MigrationNotFoundForInstance(MigrationNotFound):
+    msg_fmt = _("Migration %(migration_id)s not found for instance "
+                "%(instance_id)s")
+
+
+class InvalidMigrationState(Invalid):
+    msg_fmt = _("Migration %(migration_id)s state of instance "
+                "%(instance_uuid)s is %(state)s. Cannot %(method)s while the "
+                "migration is in this state.")
 
 
 class ConsoleLogOutputException(NovaException):

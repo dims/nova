@@ -76,10 +76,6 @@ INSTANCE_IDS = {FAKE_UUID: 1}
 FIELDS = instance_obj.INSTANCE_DEFAULT_FIELDS
 
 
-def fake_gen_uuid():
-    return FAKE_UUID
-
-
 def return_servers_empty(context, *args, **kwargs):
     return objects.InstanceList(objects=[])
 
@@ -1352,6 +1348,12 @@ class ServersControllerUpdateTest(ControllerTest):
         req.body = jsonutils.dump_as_bytes(body)
         return req
 
+    @property
+    def wsgi_app(self):
+        with mock.patch.object(extensions.ExtensionManager, 'load_extension'):
+            # patch load_extension because it's expensive in fakes.wsgi_app
+            return fakes.wsgi_app(init_only=('servers',))
+
     def test_update_server_all_attributes(self):
         body = {'server': {
                   'name': 'server_test',
@@ -1374,7 +1376,7 @@ class ServersControllerUpdateTest(ControllerTest):
             xmlns="http://docs.openstack.org/compute/api/v1.1"
             key="Label"></meta>"""
         req = self._get_request(body, content_type='xml')
-        res = req.get_response(fakes.wsgi_app())
+        res = req.get_response(self.wsgi_app)
         self.assertEqual(400, res.status_int)
 
     def test_update_server_invalid_xml_raises_expat(self):
@@ -1383,7 +1385,7 @@ class ServersControllerUpdateTest(ControllerTest):
             xmlns="http://docs.openstack.org/compute/api/v1.1"
             key="Label"></meta>"""
         req = self._get_request(body, content_type='xml')
-        res = req.get_response(fakes.wsgi_app())
+        res = req.get_response(self.wsgi_app)
         self.assertEqual(400, res.status_int)
 
     def test_update_server_name(self):
@@ -1886,7 +1888,7 @@ class ServersControllerCreateTest(test.TestCase):
             instance = fake_instance.fake_db_instance(**{
                 'id': self.instance_cache_num,
                 'display_name': inst['display_name'] or 'test',
-                'uuid': FAKE_UUID,
+                'uuid': inst['uuid'],
                 'instance_type': inst_type,
                 'access_ip_v4': '1.2.3.4',
                 'access_ip_v6': 'fead::1234',
@@ -1935,7 +1937,6 @@ class ServersControllerCreateTest(test.TestCase):
         fakes.stub_out_rate_limiting(self.stubs)
         fakes.stub_out_key_pair_funcs(self.stubs)
         fake.stub_out_image_service(self)
-        self.stubs.Set(uuid, 'uuid4', fake_gen_uuid)
         self.stub_out('nova.db.instance_add_security_group',
                       return_security_group)
         self.stub_out('nova.db.project_get_networks', project_get_networks)
@@ -1947,7 +1948,6 @@ class ServersControllerCreateTest(test.TestCase):
                        server_update_and_get_original)
         self.stubs.Set(manager.VlanManager, 'allocate_fixed_ip',
                        fake_method)
-        self.stub_out('nova.objects.RequestSpec.create', fake_method)
         self.body = {
             'server': {
                 'min_count': 2,
@@ -1991,7 +1991,8 @@ class ServersControllerCreateTest(test.TestCase):
         self.req.body = jsonutils.dump_as_bytes(self.body)
         server = self.controller.create(self.req, self.body).obj['server']
         self._check_admin_pass_len(server)
-        self.assertEqual(FAKE_UUID, server['id'])
+        instance = self.instance_cache_by_uuid.values()[0]
+        self.assertEqual(instance['uuid'], server['id'])
         return server
 
     def test_create_instance_private_flavor(self):
@@ -2073,7 +2074,8 @@ class ServersControllerCreateTest(test.TestCase):
         self.ext_mgr.extensions = {'os-multiple-create': 'fake'}
         self.req.body = jsonutils.dump_as_bytes(self.body)
         res = self.controller.create(self.req, self.body).obj
-        self.assertEqual(FAKE_UUID, res["server"]["id"])
+        instance_uuids = self.instance_cache_by_uuid.keys()
+        self.assertIn(res["server"]["id"], instance_uuids)
         self._check_admin_pass_len(res["server"])
 
     def test_create_multiple_instances_pass_disabled(self):
@@ -2084,7 +2086,8 @@ class ServersControllerCreateTest(test.TestCase):
         self.flags(enable_instance_password=False)
         self.req.body = jsonutils.dump_as_bytes(self.body)
         res = self.controller.create(self.req, self.body).obj
-        self.assertEqual(FAKE_UUID, res["server"]["id"])
+        instance_uuids = self.instance_cache_by_uuid.keys()
+        self.assertIn(res["server"]["id"], instance_uuids)
         self._check_admin_pass_missing(res["server"])
 
     def test_create_multiple_instances_resv_id_return(self):
@@ -2130,7 +2133,8 @@ class ServersControllerCreateTest(test.TestCase):
         self.req.body = jsonutils.dump_as_bytes(self.body)
         res = self.controller.create(self.req, self.body).obj
         server = res['server']
-        self.assertEqual(FAKE_UUID, server['id'])
+        instance = self.instance_cache_by_uuid.values()[0]
+        self.assertEqual(instance['uuid'], server['id'])
 
     def test_create_instance_image_ref_is_invalid(self):
         image_uuid = 'this_is_not_a_valid_uuid'
@@ -2298,7 +2302,8 @@ class ServersControllerCreateTest(test.TestCase):
 
         server = res['server']
         self._check_admin_pass_len(server)
-        self.assertEqual(FAKE_UUID, server['id'])
+        instance = self.instance_cache_by_uuid.values()[0]
+        self.assertEqual(instance['uuid'], server['id'])
 
     def test_create_instance_pass_disabled(self):
         self.flags(enable_instance_password=False)
@@ -2307,7 +2312,8 @@ class ServersControllerCreateTest(test.TestCase):
 
         server = res['server']
         self._check_admin_pass_missing(server)
-        self.assertEqual(FAKE_UUID, server['id'])
+        instance = self.instance_cache_by_uuid.values()[0]
+        self.assertEqual(instance['uuid'], server['id'])
 
     @mock.patch('nova.virt.hardware.numa_get_constraints')
     def test_create_instance_numa_topology_wrong(self, numa_constraints_mock):
@@ -2398,7 +2404,8 @@ class ServersControllerCreateTest(test.TestCase):
         self.req.body = jsonutils.dump_as_bytes(self.body)
         res = self.controller.create(self.req, self.body).obj
 
-        self.assertEqual(FAKE_UUID, res["server"]["id"])
+        instance = self.instance_cache_by_uuid.values()[0]
+        self.assertEqual(instance['uuid'], res["server"]["id"])
         self._check_admin_pass_len(res["server"])
 
     def test_create_instance_invalid_flavor_href(self):
@@ -2435,7 +2442,8 @@ class ServersControllerCreateTest(test.TestCase):
         self.req.body = jsonutils.dump_as_bytes(self.body)
         res = self.controller.create(self.req, self.body).obj
         server = res['server']
-        self.assertEqual(FAKE_UUID, server['id'])
+        instance = self.instance_cache_by_uuid.values()[0]
+        self.assertEqual(instance['uuid'], server['id'])
 
     def test_create_instance_with_bad_config_drive(self):
         self.ext_mgr.extensions = {'os-config-drive': 'fake'}
@@ -2450,7 +2458,8 @@ class ServersControllerCreateTest(test.TestCase):
         self.req.body = jsonutils.dump_as_bytes(self.body)
         res = self.controller.create(self.req, self.body).obj
         server = res['server']
-        self.assertEqual(FAKE_UUID, server['id'])
+        instance = self.instance_cache_by_uuid.values()[0]
+        self.assertEqual(instance['uuid'], server['id'])
 
     def test_create_instance_with_config_drive_disabled(self):
         config_drive = [{'config_drive': 'foo'}]
@@ -2477,7 +2486,8 @@ class ServersControllerCreateTest(test.TestCase):
         res = self.controller.create(self.req, self.body).obj
 
         server = res['server']
-        self.assertEqual(FAKE_UUID, server['id'])
+        instance = self.instance_cache_by_uuid.values()[0]
+        self.assertEqual(instance['uuid'], server['id'])
 
     def test_create_instance_admin_pass(self):
         self.body['server']['flavorRef'] = 3,
@@ -2841,11 +2851,12 @@ class ServersControllerCreateTest(test.TestCase):
                           self.controller.create, self.req, self.body)
 
     def test_create_location(self):
-        selfhref = 'http://localhost/v2/fake/servers/%s' % FAKE_UUID
         image_href = 'http://localhost/v2/images/%s' % self.image_uuid
         self.body['server']['imageRef'] = image_href
         self.req.body = jsonutils.dump_as_bytes(self.body)
         robj = self.controller.create(self.req, self.body)
+        instance = self.instance_cache_by_uuid.values()[0]
+        selfhref = 'http://localhost/v2/fake/servers/%s' % instance['uuid']
         self.assertEqual(selfhref, robj['Location'])
 
     def _do_test_create_instance_above_quota(self, resource, allowed, quota,

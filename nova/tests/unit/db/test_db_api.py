@@ -65,6 +65,7 @@ from nova.objects import fields
 from nova import quota
 from nova import test
 from nova.tests.unit import matchers
+from nova.tests import uuidsentinel
 from nova import utils
 
 CONF = cfg.CONF
@@ -72,7 +73,6 @@ CONF.import_opt('reserved_host_memory_mb', 'nova.compute.resource_tracker')
 CONF.import_opt('reserved_host_disk_mb', 'nova.compute.resource_tracker')
 
 get_engine = sqlalchemy_api.get_engine
-get_session = sqlalchemy_api.get_session
 
 
 def _reservation_get(context, uuid):
@@ -534,36 +534,8 @@ class ModelQueryTestCase(DbTestCase):
             self.assertRaises(TypeError, sqlalchemy_api.model_query,
                               self.context, "")
 
-    @mock.patch.object(sqlalchemy_api, 'get_session')
-    def test_model_query_use_slave_false(self, mock_get_session):
-        sqlalchemy_api.model_query(self.context, models.Instance,
-                                   use_slave=False)
-        mock_get_session.assert_called_once_with(use_slave=False)
-
-    @mock.patch.object(sqlalchemy_api, 'get_session')
-    def test_model_query_use_slave_no_slave_connection(self, mock_get_session):
-        self.flags(slave_connection='', group='database')
-        sqlalchemy_api.model_query(self.context, models.Instance,
-                                   use_slave=True)
-        mock_get_session.assert_called_once_with(use_slave=False)
-
-    @mock.patch.object(sqlalchemy_api, 'get_session')
-    def test_model_query_use_slave_true(self, mock_get_session):
-        self.flags(slave_connection='foo://bar', group='database')
-        sqlalchemy_api.model_query(self.context, models.Instance,
-                                   use_slave=True)
-        mock_get_session.assert_called_once_with(use_slave=True)
-
-    @mock.patch.object(sqlalchemy_api, 'get_session')
-    def test_model_query_lazy_session_default(self, mock_get_session):
-        sqlalchemy_api.model_query(self.context, models.Instance,
-                                   session=mock.MagicMock())
-        self.assertFalse(mock_get_session.called)
-
-    @mock.patch.object(sqlalchemy_api, 'get_session')
     @mock.patch.object(sqlalchemyutils, 'model_query')
-    def test_model_query_use_context_session(self, mock_model_query,
-                                             mock_get_session):
+    def test_model_query_use_context_session(self, mock_model_query):
         @sqlalchemy_api.main_context_manager.reader
         def fake_method(context):
             session = context.session
@@ -571,14 +543,12 @@ class ModelQueryTestCase(DbTestCase):
             return session
 
         session = fake_method(self.context)
-        self.assertFalse(mock_get_session.called)
         mock_model_query.assert_called_once_with(models.Instance, session,
                                                  None, deleted=False)
 
 
 class EngineFacadeTestCase(DbTestCase):
-    @mock.patch.object(sqlalchemy_api, 'get_session')
-    def test_use_single_context_session_writer(self, mock_get_session):
+    def test_use_single_context_session_writer(self):
         # Checks that session in context would not be overwritten by
         # annotation @sqlalchemy_api.main_context_manager.writer if annotation
         # is used twice.
@@ -595,11 +565,9 @@ class EngineFacadeTestCase(DbTestCase):
             return session
 
         parent_session, child_session = fake_parent_method(self.context)
-        self.assertFalse(mock_get_session.called)
         self.assertEqual(parent_session, child_session)
 
-    @mock.patch.object(sqlalchemy_api, 'get_session')
-    def test_use_single_context_session_reader(self, mock_get_session):
+    def test_use_single_context_session_reader(self):
         # Checks that session in context would not be overwritten by
         # annotation @sqlalchemy_api.main_context_manager.reader if annotation
         # is used twice.
@@ -616,7 +584,6 @@ class EngineFacadeTestCase(DbTestCase):
             return session
 
         parent_session, child_session = fake_parent_method(self.context)
-        self.assertFalse(mock_get_session.called)
         self.assertEqual(parent_session, child_session)
 
 
@@ -1104,6 +1071,13 @@ class SqlAlchemyDbApiNoDbTestCase(test.NoDBTestCase):
         mock_create_facade.assert_called_once_with()
         mock_facade.get_engine.assert_called_once_with(use_slave=False)
 
+    def test_get_db_conf_with_connection(self):
+        mock_conf_group = mock.MagicMock()
+        mock_conf_group.connection = 'fakemain://'
+        db_conf = sqlalchemy_api._get_db_conf(mock_conf_group,
+                                              connection='fake://')
+        self.assertEqual('fake://', db_conf['connection'])
+
     @mock.patch.object(sqlalchemy_api.api_context_manager._factory,
                        'get_legacy_facade')
     def test_get_api_engine(self, mock_create_facade):
@@ -1113,26 +1087,6 @@ class SqlAlchemyDbApiNoDbTestCase(test.NoDBTestCase):
         sqlalchemy_api.get_api_engine()
         mock_create_facade.assert_called_once_with()
         mock_facade.get_engine.assert_called_once_with()
-
-    @mock.patch.object(sqlalchemy_api.main_context_manager._factory,
-                       'get_legacy_facade')
-    def test_get_session(self, mock_create_facade):
-        mock_facade = mock.MagicMock()
-        mock_create_facade.return_value = mock_facade
-
-        sqlalchemy_api.get_session()
-        mock_create_facade.assert_called_once_with()
-        mock_facade.get_session.assert_called_once_with(use_slave=False)
-
-    @mock.patch.object(sqlalchemy_api.api_context_manager._factory,
-                       'get_legacy_facade')
-    def test_get_api_session(self, mock_create_facade):
-        mock_facade = mock.MagicMock()
-        mock_create_facade.return_value = mock_facade
-
-        sqlalchemy_api.get_api_session()
-        mock_create_facade.assert_called_once_with()
-        mock_facade.get_session.assert_called_once_with()
 
     @mock.patch.object(sqlalchemy_api, '_instance_get_by_uuid')
     @mock.patch.object(sqlalchemy_api, '_instances_fill_metadata')
@@ -1522,6 +1476,20 @@ class MigrationTestCase(test.TestCase):
     def test_migration_update_not_found(self):
         self.assertRaises(exception.MigrationNotFound,
                           db.migration_update, self.ctxt, 42, {})
+
+    def test_get_migration_for_instance(self):
+        migrations = db.migration_get_all_by_filters(self.ctxt, [])
+        migration_id = migrations[0].id
+        instance_uuid = migrations[0].instance_uuid
+        instance_migration = db.migration_get_by_id_and_instance(
+            self.ctxt, migration_id, instance_uuid)
+        self.assertEqual(migration_id, instance_migration.id)
+        self.assertEqual(instance_uuid, instance_migration.instance_uuid)
+
+    def test_get_migration_for_instance_not_found(self):
+        self.assertRaises(exception.MigrationNotFoundForInstance,
+                          db.migration_get_by_id_and_instance, self.ctxt,
+                          '500', '501')
 
 
 class ModelsObjectComparatorMixin(object):
@@ -7345,6 +7313,7 @@ class ComputeNodeTestCase(test.TestCase, ModelsObjectComparatorMixin):
                             disabled=False)
         self.service = db.service_create(self.ctxt, self.service_dict)
         self.compute_node_dict = dict(vcpus=2, memory_mb=1024, local_gb=2048,
+                                 uuid=uuidsentinel.fake_compute_node,
                                  vcpus_used=0, memory_mb_used=0,
                                  local_gb_used=0, free_ram_mb=1024,
                                  free_disk_gb=2048, hypervisor_type="xen",
@@ -8384,7 +8353,11 @@ class ArchiveTestCase(test.TestCase, ModelsObjectComparatorMixin):
             # NOTE(snikitin): migration 266 introduced a new table 'tags',
             #                 which have no shadow table and it's
             #                 completely OK, so we should skip it here
-            if table_name == 'tags':
+            # NOTE(cdent): migration 314 introduced three new
+            # ('resource_providers', 'allocations' and 'inventories')
+            # with no shadow table and it's OK, so skip.
+            if table_name in ['tags', 'resource_providers', 'allocations',
+                              'inventories']:
                 continue
 
             if table_name.startswith("shadow_"):
@@ -8461,6 +8434,11 @@ class ArchiveTestCase(test.TestCase, ModelsObjectComparatorMixin):
 
     def _test_archive_deleted_rows_for_one_uuid_table(self, tablename):
         """:returns: 0 on success, 1 if no uuid column, 2 if insert failed."""
+        # NOTE(cdent): migration 314 adds the resource_providers
+        # table with a uuid column that does not archive, so skip.
+        skip_tables = ['resource_providers']
+        if tablename in skip_tables:
+            return 1
         main_table = sqlalchemyutils.get_table(self.engine, tablename)
         if not hasattr(main_table.c, "uuid"):
             # Not a uuid table, so skip it.

@@ -18,7 +18,6 @@ import nova.cloudpipe.pipelib
 import nova.cmd.novnc
 import nova.cmd.serialproxy
 import nova.cmd.spicehtml5proxy
-import nova.conductor.api
 import nova.conductor.rpcapi
 import nova.conductor.tasks.live_migrate
 import nova.conf
@@ -53,7 +52,6 @@ import nova.spice
 import nova.utils
 import nova.volume
 import nova.volume.cinder
-import nova.wsgi
 
 
 def list_opts():
@@ -86,12 +84,10 @@ def list_opts():
              nova.utils.monkey_patch_opts,
              nova.utils.utils_opts,
              nova.volume._volume_opts,
-             nova.wsgi.wsgi_opts,
          )),
         ('barbican', nova.keymgr.barbican.barbican_opts),
         ('cinder', nova.volume.cinder.cinder_opts),
         ('api_database', nova.db.sqlalchemy.api.api_db_opts),
-        ('conductor', nova.conductor.api.conductor_opts),
         ('database', nova.db.sqlalchemy.api.oslo_db_options.database_opts),
         ('glance', nova.image.glance.glance_opts),
         ('image_file_url', [nova.image.download.file.opt_group]),

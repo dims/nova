@@ -29,6 +29,7 @@ from oslo_utils import strutils
 from oslo_utils import units
 import six
 
+import nova.conf
 from nova import exception
 from nova.i18n import _
 from nova.i18n import _LE, _LI, _LW
@@ -70,10 +71,9 @@ __imagebackend_opts = [
                     ' format)'),
         ]
 
-CONF = cfg.CONF
+CONF = nova.conf.CONF
 CONF.register_opts(__imagebackend_opts, 'libvirt')
 CONF.import_opt('image_cache_subdirectory_name', 'nova.virt.imagecache')
-CONF.import_opt('preallocate_images', 'nova.virt.driver')
 CONF.import_opt('enabled', 'nova.compute.api',
                 group='ephemeral_storage_encryption')
 CONF.import_opt('cipher', 'nova.compute.api',
@@ -264,9 +264,9 @@ class Image(object):
         """
         can_fallocate = getattr(self.__class__, 'can_fallocate', None)
         if can_fallocate is None:
-            _out, err = utils.trycmd('fallocate', '-n', '-l', '1',
-                                     self.path + '.fallocate_test')
-            fileutils.delete_if_exists(self.path + '.fallocate_test')
+            test_path = self.path + '.fallocate_test'
+            _out, err = utils.trycmd('fallocate', '-l', '1', test_path)
+            fileutils.delete_if_exists(test_path)
             can_fallocate = not err
             self.__class__.can_fallocate = can_fallocate
             if not can_fallocate:
@@ -531,10 +531,15 @@ class Raw(Image):
         else:
             if not os.path.exists(base):
                 prepare_template(target=base, max_size=size, *args, **kwargs)
+
+            # NOTE(mikal): Update the mtime of the base file so the image
+            # cache manager knows it is in use.
+            libvirt_utils.update_mtime(base)
             self.verify_base_size(base, size)
             if not os.path.exists(self.path):
                 with fileutils.remove_path_on_error(self.path):
                     copy_raw_image(base, self.path, size)
+
         self.correct_format()
 
     def resize_image(self, size):
@@ -584,6 +589,10 @@ class Qcow2(Image):
         # Download the unmodified base image unless we already have a copy.
         if not os.path.exists(base):
             prepare_template(target=base, max_size=size, *args, **kwargs)
+
+        # NOTE(ankit): Update the mtime of the base file so the image
+        # cache manager knows it is in use.
+        libvirt_utils.update_mtime(base)
         self.verify_base_size(base, size)
 
         legacy_backing_size = None

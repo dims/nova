@@ -88,10 +88,8 @@ wrap_exception = functools.partial(exception.wrap_exception,
                                    get_notifier=get_notifier)
 
 CONF = nova.conf.CONF
-
 CONF.import_opt('compute_topic', 'nova.compute.rpcapi')
 CONF.import_opt('enable', 'nova.cells.opts', group='cells')
-CONF.import_opt('default_ephemeral_format', 'nova.virt.driver')
 
 MAX_USERDATA_SIZE = 65535
 RO_SECURITY_GROUPS = ['default']
@@ -677,8 +675,8 @@ class API(base.Base):
             image_defined_bdms = block_device.from_legacy_mapping(
                 image_defined_bdms, None, root_device_name)
         else:
-            image_defined_bdms = map(block_device.BlockDeviceDict,
-                                     image_defined_bdms)
+            image_defined_bdms = list(map(block_device.BlockDeviceDict,
+                                          image_defined_bdms))
 
         if image_mapping:
             image_mapping = self._prepare_image_mapping(instance_type,
@@ -1031,6 +1029,8 @@ class API(base.Base):
         if not group_hint:
             return
 
+        # TODO(gibi): We need to remove the following validation code when
+        # removing legacy v2 code.
         if not uuidutils.is_uuid_like(group_hint):
             msg = _('Server group scheduler hint must be a UUID.')
             raise exception.InvalidInput(reason=msg)
@@ -1353,8 +1353,9 @@ class API(base.Base):
 
         instance.system_metadata.update(system_meta)
 
-        self.security_group_api.populate_security_groups(instance,
-                                                         security_groups)
+        pop_sec_groups = self.security_group_api.populate_security_groups
+        instance.security_groups = pop_sec_groups(security_groups)
+
         return instance
 
     # NOTE(bcwaldon): No policy check since this is only used by scheduler and
@@ -2272,8 +2273,8 @@ class API(base.Base):
             except (exception.InstanceQuiesceNotSupported,
                     exception.QemuGuestAgentNotEnabled,
                     exception.NovaException, NotImplementedError) as err:
-                if strutils.bool_from_string(properties.get(
-                        'os_require_quiesce')):
+                if strutils.bool_from_string(instance.system_metadata.get(
+                        'image_os_require_quiesce')):
                     raise
                 else:
                     LOG.info(_LI('Skipping quiescing instance: '
@@ -3287,6 +3288,35 @@ class API(base.Base):
                 host_name, block_migration=block_migration,
                 disk_over_commit=disk_over_commit)
 
+    @check_instance_lock
+    @check_instance_cell
+    @check_instance_state(vm_state=[vm_states.ACTIVE],
+                          task_state=[task_states.MIGRATING])
+    def live_migrate_force_complete(self, context, instance, migration_id):
+        """Force live migration to complete.
+
+        :param context: Security context
+        :param instance: The instance that is being migrated
+        :param migration_id: ID of ongoing migration
+
+        """
+        LOG.debug("Going to try to force live migration to complete",
+                  instance=instance)
+
+        # NOTE(pkoniszewski): Get migration object to check if there is ongoing
+        # live migration for particular instance. Also pass migration id to
+        # compute to double check and avoid possible race condition.
+        migration = objects.Migration.get_by_id_and_instance(
+            context, migration_id, instance.uuid)
+        if migration.status != 'running':
+            raise exception.InvalidMigrationState(migration_id=migration_id,
+                                                  instance_uuid=instance.uuid,
+                                                  state=migration.status,
+                                                  method='force complete')
+
+        self.compute_rpcapi.live_migration_force_complete(
+            context, instance, migration.id)
+
     @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.STOPPED,
                                     vm_states.ERROR])
     def evacuate(self, context, instance, host, on_shared_storage,
@@ -3329,6 +3359,13 @@ class API(base.Base):
         compute_utils.notify_about_instance_usage(
             self.notifier, context, instance, "evacuate")
 
+        try:
+            request_spec = objects.RequestSpec.get_by_instance_uuid(
+                context, instance.uuid)
+        except exception.RequestSpecNotFound:
+            # Some old instances can still have no RequestSpec object attached
+            # to them, we need to support the old way
+            request_spec = None
         return self.compute_task_api.rebuild_instance(context,
                        instance=instance,
                        new_pass=admin_password,
@@ -3339,7 +3376,9 @@ class API(base.Base):
                        bdms=None,
                        recreate=True,
                        on_shared_storage=on_shared_storage,
-                       host=host)
+                       host=host,
+                       request_spec=request_spec,
+                       )
 
     def get_migrations(self, context, filters):
         """Get all migrations for the given filters."""
@@ -4241,9 +4280,8 @@ class SecurityGroupAPI(base.Base, security_group_base.SecurityGroupBase):
         groups = objects.SecurityGroupList.get_by_instance(context, instance)
         return [{'name': group.name} for group in groups]
 
-    def populate_security_groups(self, instance, security_groups):
+    def populate_security_groups(self, security_groups):
         if not security_groups:
-            # Make sure it's an empty list and not None
-            security_groups = []
-        instance.security_groups = security_group_obj.make_secgroup_list(
-            security_groups)
+            # Make sure it's an empty SecurityGroupList and not None
+            return objects.SecurityGroupList()
+        return security_group_obj.make_secgroup_list(security_groups)

@@ -29,7 +29,6 @@ from eventlet import greenthread
 import mock
 from mox3 import mox
 from neutronclient.common import exceptions as neutron_exceptions
-from oslo_config import cfg
 from oslo_log import log as logging
 import oslo_messaging as messaging
 from oslo_serialization import jsonutils
@@ -56,6 +55,7 @@ from nova.compute import task_states
 from nova.compute import utils as compute_utils
 from nova.compute import vm_states
 from nova.conductor import manager as conductor_manager
+import nova.conf
 from nova.console import type as ctype
 from nova import context
 from nova import db
@@ -98,11 +98,10 @@ from nova.volume import cinder
 
 QUOTAS = quota.QUOTAS
 LOG = logging.getLogger(__name__)
-CONF = cfg.CONF
+CONF = nova.conf.CONF
 CONF.import_opt('compute_manager', 'nova.service')
 CONF.import_opt('host', 'nova.netconf')
 CONF.import_opt('live_migration_retry_count', 'nova.compute.manager')
-CONF.import_opt('default_ephemeral_format', 'nova.virt.driver')
 
 
 FAKE_IMAGE_REF = uuids.image_ref
@@ -254,12 +253,6 @@ class BaseTestCase(test.TestCase):
         self.stubs.Set(network_api.API, 'allocate_for_instance',
                        fake_allocate_for_instance)
         self.compute_api = compute.API()
-
-        def fake_spec_create(*args, **kwargs):
-            pass
-
-        # Tests in this module do not depend on this running.
-        self.stub_out('nova.objects.RequestSpec.create', fake_spec_create)
 
         # Just to make long lines short
         self.rt = self.compute._get_resource_tracker(NODENAME)
@@ -7610,9 +7603,9 @@ class ComputeAPITestCase(BaseTestCase):
         bdms = block_device_obj.BlockDeviceMappingList.get_by_instance_uuid(
             self.context, instance_uuid)
 
-        ephemeral = filter(block_device.new_format_is_ephemeral, bdms)
+        ephemeral = list(filter(block_device.new_format_is_ephemeral, bdms))
         self.assertEqual(1, len(ephemeral))
-        swap = filter(block_device.new_format_is_swap, bdms)
+        swap = list(filter(block_device.new_format_is_swap, bdms))
         self.assertEqual(1, len(swap))
 
         self.assertEqual(1024, swap[0].volume_size)
@@ -7736,7 +7729,7 @@ class ComputeAPITestCase(BaseTestCase):
 
         self.assertRaises(exception.InstanceUserDataTooLarge,
             self.compute_api.create, self.context, inst_type,
-            self.fake_image['id'], user_data=('1' * 65536))
+            self.fake_image['id'], user_data=(b'1' * 65536))
 
     def test_create_with_malformed_user_data(self):
         # Test an instance type with malformed user data.
@@ -7748,7 +7741,7 @@ class ComputeAPITestCase(BaseTestCase):
 
         self.assertRaises(exception.InstanceUserDataMalformed,
             self.compute_api.create, self.context, inst_type,
-            self.fake_image['id'], user_data='banana')
+            self.fake_image['id'], user_data=b'banana')
 
     def test_create_with_base64_user_data(self):
         # Test an instance type with ok much user data.
@@ -7762,7 +7755,7 @@ class ComputeAPITestCase(BaseTestCase):
         # base64
         (refs, resv_id) = self.compute_api.create(
             self.context, inst_type, self.fake_image['id'],
-            user_data=base64.encodestring('1' * 48510))
+            user_data=base64.encodestring(b'1' * 48510))
 
     def test_populate_instance_for_create(self):
         base_options = {'image_ref': self.fake_image['id'],
@@ -7832,9 +7825,27 @@ class ComputeAPITestCase(BaseTestCase):
         self.stubs.Set(fake_image._FakeImageService, 'show', self.fake_show)
 
         inst_type = flavors.get_default_flavor()
-        self.assertRaises(exception.InvalidInput, self.compute_api.create,
-            self.context, inst_type, self.fake_image['id'],
-            scheduler_hints={'group': 'groupname'})
+        self.assertRaises(
+                exception.InvalidInput,
+                self.compute_api.create,
+                self.context,
+                inst_type,
+                self.fake_image['id'],
+                scheduler_hints={'group': 'non-uuid'})
+
+    def test_instance_create_with_group_uuid_fails_group_not_exist(self):
+        self.stub_out('nova.tests.unit.image.fake._FakeImageService.show',
+                      self.fake_show)
+
+        inst_type = flavors.get_default_flavor()
+        self.assertRaises(
+                exception.InstanceGroupNotFound,
+                self.compute_api.create,
+                self.context,
+                inst_type,
+                self.fake_image['id'],
+                scheduler_hints={'group':
+                                     '5b674f73-c8cf-40ef-9965-3b6fe4b304b1'})
 
     def test_destroy_instance_disassociates_security_groups(self):
         # Make sure destroying disassociates security groups.
@@ -10140,22 +10151,44 @@ class ComputeAPITestCase(BaseTestCase):
         instance = self._create_fake_instance_obj(services=True)
         self.assertIsNone(instance.task_state)
 
-        def fake_service_is_up(*args, **kwargs):
-            return False
+        ctxt = self.context.elevated()
+
+        fake_spec = objects.RequestSpec()
 
         def fake_rebuild_instance(*args, **kwargs):
             instance.host = kwargs['host']
             instance.save()
 
-        self.stubs.Set(self.compute_api.servicegroup_api, 'service_is_up',
-                fake_service_is_up)
-        self.stubs.Set(self.compute_api.compute_task_api, 'rebuild_instance',
-                fake_rebuild_instance)
-        self.compute_api.evacuate(self.context.elevated(),
-                                  instance,
-                                  host='fake_dest_host',
-                                  on_shared_storage=True,
-                                  admin_password=None)
+        @mock.patch.object(self.compute_api.compute_task_api,
+                           'rebuild_instance')
+        @mock.patch.object(objects.RequestSpec,
+                           'get_by_instance_uuid')
+        @mock.patch.object(self.compute_api.servicegroup_api, 'service_is_up')
+        def do_test(service_is_up, get_by_instance_uuid, rebuild_instance):
+            service_is_up.return_value = False
+            get_by_instance_uuid.return_value = fake_spec
+            rebuild_instance.side_effect = fake_rebuild_instance
+
+            self.compute_api.evacuate(ctxt,
+                                      instance,
+                                      host='fake_dest_host',
+                                      on_shared_storage=True,
+                                      admin_password=None)
+
+            rebuild_instance.assert_called_once_with(
+                ctxt,
+                instance=instance,
+                new_pass=None,
+                injected_files=None,
+                image_ref=None,
+                orig_image_ref=None,
+                orig_sys_metadata=None,
+                bdms=None,
+                recreate=True,
+                on_shared_storage=True,
+                request_spec=fake_spec,
+                host='fake_dest_host')
+        do_test()
 
         instance.refresh()
         self.assertEqual(instance.task_state, task_states.REBUILDING)
@@ -11762,8 +11795,8 @@ class ComputeInjectedFilesTestCase(BaseTestCase):
     def test_injected_success(self):
         # test with valid b64 encoded content.
         injected_files = [
-            ('/a/b/c', base64.b64encode('foobarbaz')),
-            ('/d/e/f', base64.b64encode('seespotrun')),
+            ('/a/b/c', base64.b64encode(b'foobarbaz')),
+            ('/d/e/f', base64.b64encode(b'seespotrun')),
         ]
 
         decoded_files = [
@@ -11775,7 +11808,7 @@ class ComputeInjectedFilesTestCase(BaseTestCase):
     def test_injected_invalid(self):
         # test with invalid b64 encoded content
         injected_files = [
-            ('/a/b/c', base64.b64encode('foobarbaz')),
+            ('/a/b/c', base64.b64encode(b'foobarbaz')),
             ('/d/e/f', 'seespotrun'),
         ]
 

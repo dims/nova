@@ -20,10 +20,11 @@ import oslo_messaging as messaging
 from oslo_serialization import jsonutils
 from oslo_versionedobjects import base as ovo_base
 
+import nova.conf
 from nova.objects import base as objects_base
 from nova import rpc
 
-CONF = cfg.CONF
+CONF = nova.conf.CONF
 
 rpcapi_cap_opt = cfg.StrOpt('conductor',
         help='Set a version cap for messages sent to conductor services')
@@ -195,6 +196,8 @@ class ConductorAPI(object):
     ... Liberty supports message version 3.0.  So, any changes to
     existing methods in 3.x after that point should be done such
     that they can handle the version_cap being set to 3.0.
+
+    * Remove provider_fw_rule_get_all()
     """
 
     VERSION_ALIASES = {
@@ -215,10 +218,6 @@ class ConductorAPI(object):
         self.client = rpc.get_client(target,
                                      version_cap=version_cap,
                                      serializer=serializer)
-
-    def provider_fw_rule_get_all(self, context):
-        cctxt = self.client.prepare()
-        return cctxt.call(context, 'provider_fw_rule_get_all')
 
     # TODO(hanlind): This method can be removed once oslo.versionedobjects
     # has been converted to use version_manifests in remotable_classmethod
@@ -268,7 +267,7 @@ class ComputeTaskAPI(object):
     1.9 - Converted requested_networks to NetworkRequestList object
     1.10 - Made migrate_server() and build_instances() send flavor objects
     1.11 - Added clean_shutdown to migrate_server()
-
+    1.12 - Added request_spec to rebuild_instance()
     """
 
     def __init__(self):
@@ -339,13 +338,23 @@ class ComputeTaskAPI(object):
     def rebuild_instance(self, ctxt, instance, new_pass, injected_files,
             image_ref, orig_image_ref, orig_sys_metadata, bdms,
             recreate=False, on_shared_storage=False, host=None,
-            preserve_ephemeral=False, kwargs=None):
-        cctxt = self.client.prepare(version='1.8')
-        cctxt.cast(ctxt, 'rebuild_instance',
-                   instance=instance, new_pass=new_pass,
-                   injected_files=injected_files, image_ref=image_ref,
-                   orig_image_ref=orig_image_ref,
-                   orig_sys_metadata=orig_sys_metadata, bdms=bdms,
-                   recreate=recreate, on_shared_storage=on_shared_storage,
-                   preserve_ephemeral=preserve_ephemeral,
-                   host=host)
+            preserve_ephemeral=False, request_spec=None, kwargs=None):
+        version = '1.12'
+        kw = {'instance': instance,
+              'new_pass': new_pass,
+              'injected_files': injected_files,
+              'image_ref': image_ref,
+              'orig_image_ref': orig_image_ref,
+              'orig_sys_metadata': orig_sys_metadata,
+              'bdms': bdms,
+              'recreate': recreate,
+              'on_shared_storage': on_shared_storage,
+              'preserve_ephemeral': preserve_ephemeral,
+              'host': host,
+              'request_spec': request_spec,
+              }
+        if not self.client.can_send_version(version):
+            version = '1.8'
+            del kw['request_spec']
+        cctxt = self.client.prepare(version=version)
+        cctxt.cast(ctxt, 'rebuild_instance', **kw)

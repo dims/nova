@@ -86,6 +86,11 @@ def not_equal(*values):
     return IMPL.not_equal(*values)
 
 
+def create_context_manager(connection):
+    """Return a context manager for a cell database connection."""
+    return IMPL.create_context_manager(connection=connection)
+
+
 ###################
 
 
@@ -470,6 +475,13 @@ def migration_create(context, values):
 def migration_get(context, migration_id):
     """Finds a migration by the id."""
     return IMPL.migration_get(context, migration_id)
+
+
+def migration_get_by_id_and_instance(context, migration_id, instance_uuid):
+    """Finds a migration by the migration id and the instance uuid."""
+    return IMPL.migration_get_by_id_and_instance(context,
+                                                 migration_id,
+                                                 instance_uuid)
 
 
 def migration_get_by_instance_and_status(context, instance_uuid, status):

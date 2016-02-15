@@ -2126,17 +2126,19 @@ class _ComputeAPIUnitTestMixIn(object):
 
     def _test_snapshot_volume_backed(self, quiesce_required, quiesce_fails,
                                      vm_state=vm_states.ACTIVE):
+        fake_sys_meta = {'image_min_ram': '11',
+                         'image_min_disk': '22',
+                         'image_container_format': 'ami',
+                         'image_disk_format': 'ami',
+                         'image_ram_disk': 'fake_ram_disk_id',
+                         'image_bdm_v2': 'True',
+                         'image_block_device_mapping': '[]',
+                         'image_mappings': '[]',
+                         'image_cache_in_nova': 'True'}
+        if quiesce_required:
+            fake_sys_meta['image_os_require_quiesce'] = 'yes'
         params = dict(locked=True, vm_state=vm_state,
-                      system_metadata={'image_min_ram': '11',
-                                       'image_min_disk': '22',
-                                       'image_container_format': 'ami',
-                                       'image_disk_format': 'ami',
-                                       'image_ram_disk': 'fake_ram_disk_id',
-                                       'image_bdm_v2': 'True',
-                                       'image_block_device_mapping': '[]',
-                                       'image_mappings': '[]',
-                                       'image_cache_in_nova': 'True',
-                                       })
+                      system_metadata=fake_sys_meta)
         instance = self._create_instance_obj(params=params)
         instance['root_device_name'] = 'vda'
 
@@ -2151,13 +2153,11 @@ class _ComputeAPIUnitTestMixIn(object):
             'is_public': False,
             'min_ram': '11',
         }
+        if quiesce_required:
+            expect_meta['properties']['os_require_quiesce'] = 'yes'
 
         quiesced = [False, False]
         quiesce_expected = not quiesce_fails and vm_state == vm_states.ACTIVE
-
-        if quiesce_required:
-            instance.system_metadata['image_os_require_quiesce'] = 'yes'
-            expect_meta['properties']['os_require_quiesce'] = 'yes'
 
         def fake_get_all_by_instance(context, instance, use_slave=False):
             return copy.deepcopy(instance_bdms)
@@ -2192,6 +2192,7 @@ class _ComputeAPIUnitTestMixIn(object):
                        fake_quiesce_instance)
         self.stubs.Set(self.compute_api.compute_rpcapi, 'unquiesce_instance',
                        fake_unquiesce_instance)
+        fake_image.stub_out_image_service(self)
 
         # No block devices defined
         self.compute_api.snapshot_volume_backed(
@@ -3212,6 +3213,55 @@ class _ComputeAPIUnitTestMixIn(object):
             self.assertEqual(expect_statuses[instance.uuid],
                              host_statuses[instance.uuid])
 
+    @mock.patch.object(objects.Migration, 'get_by_id_and_instance')
+    def test_live_migrate_force_complete_succeeded(
+            self, get_by_id_and_instance):
+
+        if self.cell_type == 'api':
+            # cell api has not been implemented.
+            return
+        rpcapi = self.compute_api.compute_rpcapi
+
+        instance = self._create_instance_obj()
+        instance.task_state = task_states.MIGRATING
+
+        migration = objects.Migration()
+        migration.id = 0
+        migration.status = 'running'
+        get_by_id_and_instance.return_value = migration
+
+        with mock.patch.object(
+                rpcapi, 'live_migration_force_complete') as lm_force_complete:
+            self.compute_api.live_migrate_force_complete(
+                self.context, instance, migration.id)
+
+            lm_force_complete.assert_called_once_with(self.context,
+                                                      instance,
+                                                      0)
+
+    @mock.patch.object(objects.Migration, 'get_by_id_and_instance')
+    def test_live_migrate_force_complete_invalid_migration_state(
+            self, get_by_id_and_instance):
+        instance = self._create_instance_obj()
+        instance.task_state = task_states.MIGRATING
+
+        migration = objects.Migration()
+        migration.id = 0
+        migration.status = 'error'
+        get_by_id_and_instance.return_value = migration
+
+        self.assertRaises(exception.InvalidMigrationState,
+                          self.compute_api.live_migrate_force_complete,
+                          self.context, instance, migration.id)
+
+    def test_live_migrate_force_complete_invalid_vm_state(self):
+        instance = self._create_instance_obj()
+        instance.task_state = None
+
+        self.assertRaises(exception.InstanceInvalidState,
+                          self.compute_api.live_migrate_force_complete,
+                          self.context, instance, '1')
+
 
 class ComputeAPIUnitTestCase(_ComputeAPIUnitTestMixIn, test.NoDBTestCase):
     def setUp(self):
@@ -3313,6 +3363,13 @@ class SecurityGroupAPITest(test.NoDBTestCase):
         mock_get.return_value = groups
         names = self.secgroup_api.get_instance_security_groups(self.context,
                     uuids.instance)
-        self.assertEqual([{'name': 'bar'}, {'name': 'foo'}], sorted(names))
+        self.assertEqual(sorted([{'name': 'bar'}, {'name': 'foo'}], key=str),
+                         sorted(names, key=str))
         self.assertEqual(1, mock_get.call_count)
         self.assertEqual(uuids.instance, mock_get.call_args_list[0][0][1].uuid)
+
+    @mock.patch('nova.objects.security_group.make_secgroup_list')
+    def test_populate_security_groups(self, mock_msl):
+        r = self.secgroup_api.populate_security_groups([mock.sentinel.group])
+        mock_msl.assert_called_once_with([mock.sentinel.group])
+        self.assertEqual(r, mock_msl.return_value)
