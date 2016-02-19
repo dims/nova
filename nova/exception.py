@@ -1321,6 +1321,10 @@ class MigrationPreCheckError(MigrationError):
     msg_fmt = _("Migration pre-check error: %(reason)s")
 
 
+class MigrationSchedulerRPCError(MigrationError):
+    msg_fmt = _("Migration select destinations error: %(reason)s")
+
+
 class MalformedRequestBody(NovaException):
     msg_fmt = _("Malformed message body: %(reason)s")
 
@@ -1856,6 +1860,11 @@ class LiveMigrationWithOldNovaNotSafe(NovaException):
     msg_fmt = _("Host %(server)s is running an old version of Nova, "
                 "live migrations involving that version may cause data loss. "
                 "Upgrade Nova on %(server)s and try again.")
+
+
+class LiveMigrationURINotAvailable(NovaException):
+    msg_fmt = _('No live migration URI configured and no default available '
+                'for "%(virt_type)s" hypervisor virtualization type.')
 
 
 class UnshelveException(NovaException):
