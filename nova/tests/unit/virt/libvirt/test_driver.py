@@ -7664,6 +7664,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
                        side_effect=lambda x: eventlet.sleep(0))
     @mock.patch.object(host.DomainJobInfo, "for_domain")
     @mock.patch.object(objects.Instance, "save")
+    @mock.patch.object(objects.Migration, "save")
     @mock.patch.object(fakelibvirt.Connection, "_mark_running")
     @mock.patch.object(fakelibvirt.virDomain, "abortJob")
     def _test_live_migration_monitoring(self,
@@ -7673,6 +7674,7 @@ class LibvirtConnTestCase(test.NoDBTestCase):
                                         mock_abort,
                                         mock_running,
                                         mock_save,
+                                        mock_mig_save,
                                         mock_job_info,
                                         mock_sleep,
                                         mock_time):
@@ -7710,7 +7712,9 @@ class LibvirtConnTestCase(test.NoDBTestCase):
         mock_time.side_effect = fake_time
 
         dest = mock.sentinel.migrate_dest
-        migrate_data = mock.sentinel.migrate_data
+        migration = objects.Migration(context=self.context, id=1)
+        migrate_data = objects.LibvirtLiveMigrateData(
+            migration=migration)
 
         fake_post_method = mock.MagicMock()
         fake_recover_method = mock.MagicMock()
@@ -7723,6 +7727,8 @@ class LibvirtConnTestCase(test.NoDBTestCase):
                                      dom,
                                      finish_event,
                                      [])
+
+        mock_mig_save.assert_called_with()
 
         if expect_result == self.EXPECT_SUCCESS:
             self.assertFalse(fake_recover_method.called,
@@ -14774,6 +14780,30 @@ class LibvirtDriverTestCase(test.NoDBTestCase):
         self._test_attach_detach_interface(
             'detach_interface', power_state.SHUTDOWN,
             expected_flags=(fakelibvirt.VIR_DOMAIN_AFFECT_CONFIG))
+
+    @mock.patch('nova.virt.libvirt.driver.LOG')
+    def test_detach_interface_device_not_found(self, mock_log):
+        # Asserts that we don't log an error when the interface device is not
+        # found on the guest after a libvirt error during detach.
+        instance = self._create_instance()
+        vif = _fake_network_info(self, 1)[0]
+        guest = mock.Mock(spec='nova.virt.libvirt.guest.Guest')
+        guest.get_power_state = mock.Mock()
+        self.drvr._host.get_guest = mock.Mock(return_value=guest)
+        self.drvr.vif_driver = mock.Mock()
+        error = fakelibvirt.libvirtError(
+            'no matching network device was found')
+        error.err = (fakelibvirt.VIR_ERR_OPERATION_FAILED,)
+        guest.detach_device = mock.Mock(side_effect=error)
+        # mock out that get_interface_by_mac doesn't find the interface
+        guest.get_interface_by_mac = mock.Mock(return_value=None)
+        self.drvr.detach_interface(instance, vif)
+        guest.get_interface_by_mac.assert_called_once_with(vif['address'])
+        # an error shouldn't be logged, but a warning should be logged
+        self.assertFalse(mock_log.error.called)
+        self.assertEqual(1, mock_log.warning.call_count)
+        self.assertIn('the device is no longer found on the guest',
+                      six.text_type(mock_log.warning.call_args[0]))
 
     def test_rescue(self):
         instance = self._create_instance({'config_drive': None})

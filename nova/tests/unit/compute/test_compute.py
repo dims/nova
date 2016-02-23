@@ -198,6 +198,7 @@ class BaseTestCase(test.TestCase):
                                    'host': 'fake_phyp1',
                                    'cpu_allocation_ratio': 16.0,
                                    'ram_allocation_ratio': 1.5,
+                                   'disk_allocation_ratio': 1.0,
                                    'host_ip': '127.0.0.1'}]
             return [objects.ComputeNode._from_db_object(
                         context, objects.ComputeNode(), cn)
@@ -4000,11 +4001,10 @@ class ComputeTestCase(BaseTestCase):
         self.mox.StubOutWithMock(self.compute.network_api,
                                  "allocate_for_instance")
         self.compute.network_api.allocate_for_instance(
-            mox.IgnoreArg(),
-            mox.IgnoreArg(),
-            requested_networks=None,
-            vpn=False, macs=macs,
-            security_groups=[], dhcp_options=None).AndReturn(
+            self.context, instance, vpn=False,
+            requested_networks=None, macs=macs,
+            security_groups=[], dhcp_options=None,
+            bind_host_id=self.compute.host).AndReturn(
                 fake_network.fake_get_instance_nw_info(self, 1, 1))
 
         self.mox.StubOutWithMock(self.compute.driver, "macs_for_instance")
@@ -4046,11 +4046,11 @@ class ComputeTestCase(BaseTestCase):
         self.mox.StubOutWithMock(self.compute.network_api,
                                  "deallocate_for_instance")
         self.compute.network_api.allocate_for_instance(
-                mox.IgnoreArg(),
-                mox.IgnoreArg(),
+                self.context, instance,
                 requested_networks=None,
                 vpn=False, macs=None,
-                security_groups=[], dhcp_options=None
+                security_groups=[], dhcp_options=None,
+                bind_host_id=self.compute.host
                 ).AndRaise(messaging.RemoteError())
         self.compute.network_api.deallocate_for_instance(
                 mox.IgnoreArg(),
@@ -10045,21 +10045,29 @@ class ComputeAPITestCase(BaseTestCase):
         instance, instance_uuid = self._run_instance()
 
         rpcapi = self.compute_api.compute_task_api
-        self.mox.StubOutWithMock(self.compute_api, '_record_action_start')
-        self.mox.StubOutWithMock(rpcapi, 'live_migrate_instance')
-        self.compute_api._record_action_start(self.context, instance,
-                                              'live-migration')
-        rpcapi.live_migrate_instance(self.context, instance, 'fake_dest_host',
-                                     block_migration=True,
-                                     disk_over_commit=True)
+        fake_spec = objects.RequestSpec()
 
-        self.mox.ReplayAll()
+        @mock.patch.object(rpcapi, 'live_migrate_instance')
+        @mock.patch.object(objects.RequestSpec, 'get_by_instance_uuid')
+        @mock.patch.object(self.compute_api, '_record_action_start')
+        def do_test(record_action_start, get_by_instance_uuid,
+                    live_migrate_instance):
+            get_by_instance_uuid.return_value = fake_spec
 
-        self.compute_api.live_migrate(self.context, instance,
-                                      block_migration=True,
-                                      disk_over_commit=True,
-                                      host_name='fake_dest_host')
+            self.compute_api.live_migrate(self.context, instance,
+                                          block_migration=True,
+                                          disk_over_commit=True,
+                                          host_name='fake_dest_host')
 
+            record_action_start.assert_called_once_with(self.context, instance,
+                                                        'live-migration')
+            live_migrate_instance.assert_called_once_with(
+                self.context, instance, 'fake_dest_host',
+                block_migration=True,
+                disk_over_commit=True,
+                request_spec=fake_spec)
+
+        do_test()
         instance.refresh()
         self.assertEqual(instance['task_state'], task_states.MIGRATING)
 

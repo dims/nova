@@ -12,7 +12,6 @@
 
 import itertools
 
-import nova.availability_zones
 import nova.baserpc
 import nova.cloudpipe.pipelib
 import nova.cmd.novnc
@@ -47,7 +46,6 @@ import nova.quota
 import nova.rdp
 import nova.service
 import nova.servicegroup.api
-import nova.servicegroup.drivers.zk
 import nova.spice
 import nova.utils
 import nova.volume
@@ -63,7 +61,6 @@ def list_opts():
              [nova.db.base.db_driver_opt],
              [nova.ipv6.api.ipv6_backend_opt],
              [nova.servicegroup.api.servicegroup_driver_opt],
-             nova.availability_zones.availability_zone_opts,
              nova.cloudpipe.pipelib.cloudpipe_opts,
              nova.cmd.novnc.opts,
              nova.cmd.spicehtml5proxy.opts,
@@ -110,5 +107,4 @@ def list_opts():
              [nova.consoleauth.rpcapi.rpcapi_cap_opt],
          )),
         ('workarounds', nova.utils.workarounds_opts),
-        ('zookeeper', nova.servicegroup.drivers.zk.zk_driver_opts)
     ]

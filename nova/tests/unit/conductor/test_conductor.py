@@ -50,6 +50,7 @@ from nova.tests.unit import cast_as_call
 from nova.tests.unit.compute import test_compute
 from nova.tests.unit import fake_instance
 from nova.tests.unit import fake_notifier
+from nova.tests.unit import fake_request_spec
 from nova.tests.unit import fake_server_actions
 from nova.tests.unit import fake_utils
 from nova import utils
@@ -66,7 +67,6 @@ class FakeContext(context.RequestContext):
 class _BaseTestCase(object):
     def setUp(self):
         super(_BaseTestCase, self).setUp()
-        self.db = None
         self.user_id = 'fake'
         self.project_id = 'fake'
         self.context = FakeContext(self.user_id, self.project_id)
@@ -211,7 +211,6 @@ class ConductorAPITestCase(_BaseTestCase, test.TestCase):
             'conductor', manager='nova.conductor.manager.ConductorManager')
         self.conductor = conductor_api.API()
         self.conductor_manager = self.conductor_service.manager
-        self.db = None
 
     def test_wait_until_ready(self):
         timeouts = []
@@ -251,7 +250,6 @@ class ConductorLocalAPITestCase(ConductorAPITestCase):
         super(ConductorLocalAPITestCase, self).setUp()
         self.conductor = conductor_api.LocalAPI()
         self.conductor_manager = self.conductor._manager._target
-        self.db = db
 
     def test_wait_until_ready(self):
         # Override test in ConductorAPITestCase
@@ -530,7 +528,7 @@ class _BaseTaskTestCase(object):
         for instance in instances:
             set_state_calls.append(mock.call(
                 self.context, instance.uuid, 'compute_task', 'build_instances',
-                updates, exception, spec, self.conductor_manager.db))
+                updates, exception, spec))
             cleanup_network_calls.append(mock.call(
                 self.context, mock.ANY, None))
         state_mock.assert_has_calls(set_state_calls)
@@ -571,8 +569,7 @@ class _BaseTaskTestCase(object):
                 filter_properties, instances[0].uuid)
             set_vm_state_and_notify.assert_called_once_with(
                 self.context, instances[0].uuid, 'compute_task',
-                'build_instances', updates, mock.ANY, {},
-                self.conductor_manager.db)
+                'build_instances', updates, mock.ANY, {})
             cleanup_mock.assert_called_once_with(self.context, mock.ANY, None)
 
         _test()
@@ -642,6 +639,51 @@ class _BaseTaskTestCase(object):
         system_metadata['shelved_image_id'] = 'fake_image_id'
         system_metadata['shelved_host'] = 'fake-mini'
         self.conductor_manager.unshelve_instance(self.context, instance)
+
+    def test_unshelve_offload_instance_on_host_with_request_spec(self):
+        instance = self._create_fake_instance_obj()
+        instance.vm_state = vm_states.SHELVED_OFFLOADED
+        instance.task_state = task_states.UNSHELVING
+        instance.save()
+        system_metadata = instance.system_metadata
+
+        system_metadata['shelved_at'] = timeutils.utcnow()
+        system_metadata['shelved_image_id'] = 'fake_image_id'
+        system_metadata['shelved_host'] = 'fake-mini'
+
+        fake_spec = fake_request_spec.fake_spec_obj()
+        # FIXME(sbauza): Modify the fake RequestSpec object to either add a
+        # non-empty SchedulerRetries object or nullify the field
+        fake_spec.retry = None
+        # FIXME(sbauza): Modify the fake RequestSpec object to either add a
+        # non-empty SchedulerLimits object or nullify the field
+        fake_spec.limits = None
+        # FIXME(sbauza): Modify the fake RequestSpec object to either add a
+        # non-empty InstanceGroup object or nullify the field
+        fake_spec.instance_group = None
+
+        filter_properties = fake_spec.to_legacy_filter_properties_dict()
+        request_spec = fake_spec.to_legacy_request_spec_dict()
+
+        host = {'host': 'host1', 'nodename': 'node1', 'limits': []}
+
+        @mock.patch.object(self.conductor_manager.compute_rpcapi,
+                           'unshelve_instance')
+        @mock.patch.object(self.conductor_manager, '_schedule_instances')
+        def do_test(sched_instances, unshelve_instance):
+            sched_instances.return_value = [host]
+            self.conductor_manager.unshelve_instance(self.context, instance,
+                                                     fake_spec)
+            scheduler_utils.populate_retry(filter_properties, instance.uuid)
+            scheduler_utils.populate_filter_properties(filter_properties, host)
+            sched_instances.assert_called_once_with(self.context, request_spec,
+                                                    filter_properties)
+            unshelve_instance.assert_called_once_with(
+                self.context, instance, host['host'], image=mock.ANY,
+                filter_properties=filter_properties, node=host['nodename']
+            )
+
+        do_test()
 
     def test_unshelve_offloaded_instance_glance_image_not_found(self):
         shelved_image_id = "image_not_found"
@@ -1060,8 +1102,7 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
                 {'vm_state': vm_states.ACTIVE,
                  'task_state': None,
                  'expected_task_state': task_states.MIGRATING},
-                ex, self._build_request_spec(inst_obj),
-                self.conductor_manager.db)
+                ex, self._build_request_spec(inst_obj))
 
     def test_migrate_server_deals_with_invalidcpuinfo_exception(self):
         instance = fake_instance.fake_db_instance(uuid='uuid',
@@ -1085,8 +1126,7 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
                 {'vm_state': vm_states.ACTIVE,
                  'task_state': None,
                  'expected_task_state': task_states.MIGRATING},
-                ex, self._build_request_spec(inst_obj),
-                self.conductor_manager.db)
+                ex, self._build_request_spec(inst_obj))
         self.mox.ReplayAll()
 
         self.conductor = utils.ExceptionHelper(self.conductor)
@@ -1136,7 +1176,7 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
                         dict(vm_state=vm_states.ERROR,
                              task_state=inst_obj.task_state,
                              expected_task_state=task_states.MIGRATING,),
-                        expected_ex, request_spec, self.conductor.db)
+                        expected_ex, request_spec)
         self.assertEqual(ex.kwargs['reason'], six.text_type(expected_ex))
 
     def test_set_vm_state_and_notify(self):
@@ -1144,7 +1184,7 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
                                  'set_vm_state_and_notify')
         scheduler_utils.set_vm_state_and_notify(
                 self.context, 1, 'compute_task', 'method', 'updates',
-                'ex', 'request_spec', self.conductor.db)
+                'ex', 'request_spec')
 
         self.mox.ReplayAll()
 

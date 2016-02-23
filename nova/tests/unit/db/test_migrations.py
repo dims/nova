@@ -833,6 +833,28 @@ class NovaMigrationsCheckers(test_migrations.ModelsMigrationsSync,
                         'allocations_resource_provider_class_id_idx',
                         ['resource_provider_id', 'resource_class_id'])
 
+    def _check_315(self, engine, data):
+        self.assertColumnExists(engine, 'migrations',
+                                'memory_total')
+        self.assertColumnExists(engine, 'migrations',
+                                'memory_processed')
+        self.assertColumnExists(engine, 'migrations',
+                                'memory_remaining')
+        self.assertColumnExists(engine, 'migrations',
+                                'disk_total')
+        self.assertColumnExists(engine, 'migrations',
+                                'disk_processed')
+        self.assertColumnExists(engine, 'migrations',
+                                'disk_remaining')
+
+    def _check_316(self, engine, data):
+        self.assertColumnExists(engine, 'compute_nodes',
+                                'disk_allocation_ratio')
+
+    def _check_317(self, engine, data):
+        self.assertColumnExists(engine, 'aggregates', 'uuid')
+        self.assertColumnExists(engine, 'shadow_aggregates', 'uuid')
+
 
 class TestNovaMigrationsSQLite(NovaMigrationsCheckers,
                                test_base.DbTestCase,

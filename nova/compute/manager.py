@@ -2278,9 +2278,8 @@ class ComputeManager(manager.Manager):
                                         trying to teardown networking
         """
         context = context.elevated()
-        LOG.info(_LI('%(action_str)s instance') %
-                 {'action_str': 'Terminating'},
-                  context=context, instance=instance)
+        LOG.info(_LI('Terminating instance'),
+                 context=context, instance=instance)
 
         if notify:
             self._notify_about_instance_usage(context, instance,
@@ -4291,6 +4290,9 @@ class ComputeManager(manager.Manager):
         instance.task_state = None
         instance.save(expected_task_state=[task_states.SHELVING,
                                            task_states.SHELVING_OFFLOADING])
+        # NOTE(ndipanov): This frees the resources with the resource_tracker
+        self._update_resource_tracker(context, instance)
+
         self._delete_scheduler_instance_info(context, instance.uuid)
         self._notify_about_instance_usage(context, instance,
                 'shelve_offload.end')
@@ -5864,7 +5866,8 @@ class ComputeManager(manager.Manager):
 
         instances = objects.InstanceList.get_active_by_window_joined(
             context, begin, end, host=self.host,
-            expected_attrs=['system_metadata', 'info_cache', 'metadata'],
+            expected_attrs=['system_metadata', 'info_cache', 'metadata',
+                            'flavor'],
             use_slave=True)
         num_instances = len(instances)
         errors = 0

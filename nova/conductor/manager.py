@@ -144,7 +144,7 @@ class ComputeTaskManager(base.Base):
     may involve coordinating activities on multiple compute nodes.
     """
 
-    target = messaging.Target(namespace='compute_task', version='1.12')
+    target = messaging.Target(namespace='compute_task', version='1.14')
 
     def __init__(self):
         super(ComputeTaskManager, self).__init__()
@@ -175,7 +175,7 @@ class ComputeTaskManager(base.Base):
                                    exception.UnsupportedPolicyException)
     def migrate_server(self, context, instance, scheduler_hint, live, rebuild,
             flavor, block_migration, disk_over_commit, reservations=None,
-            clean_shutdown=True):
+            clean_shutdown=True, request_spec=None):
         if instance and not isinstance(instance, nova_object.NovaObject):
             # NOTE(danms): Until v2 of the RPC API, we need to tolerate
             # old-world instance objects here
@@ -191,7 +191,7 @@ class ComputeTaskManager(base.Base):
             flavor = objects.Flavor.get_by_id(context, flavor['id'])
         if live and not rebuild and not flavor:
             self._live_migrate(context, instance, scheduler_hint,
-                               block_migration, disk_over_commit)
+                               block_migration, disk_over_commit, request_spec)
         elif not live and not rebuild and flavor:
             instance_uuid = instance.uuid
             with compute_utils.EventReporter(context, 'cold_migrate',
@@ -250,7 +250,7 @@ class ComputeTaskManager(base.Base):
                                  ex, request_spec):
         scheduler_utils.set_vm_state_and_notify(
                 context, instance_uuid, 'compute_task', method, updates,
-                ex, request_spec, self.db)
+                ex, request_spec)
 
     def _cleanup_allocated_networks(
             self, context, instance, requested_networks):
@@ -272,7 +272,7 @@ class ComputeTaskManager(base.Base):
             pass
 
     def _live_migrate(self, context, instance, scheduler_hint,
-                      block_migration, disk_over_commit):
+                      block_migration, disk_over_commit, request_spec):
         destination = scheduler_hint.get("host")
 
         def _set_vm_state(context, instance, ex, vm_state=None,
@@ -286,7 +286,7 @@ class ComputeTaskManager(base.Base):
                 dict(vm_state=vm_state,
                      task_state=task_state,
                      expected_task_state=task_states.MIGRATING,),
-                ex, request_spec, self.db)
+                ex, request_spec)
 
         migration = objects.Migration(context=context.elevated())
         migration.dest_compute = destination
@@ -304,7 +304,7 @@ class ComputeTaskManager(base.Base):
 
         task = self._build_live_migrate_task(context, instance, destination,
                                              block_migration, disk_over_commit,
-                                             migration)
+                                             migration, request_spec)
         try:
             task.execute()
         except (exception.NoValidHost,
@@ -337,13 +337,15 @@ class ComputeTaskManager(base.Base):
             raise exception.MigrationError(reason=six.text_type(ex))
 
     def _build_live_migrate_task(self, context, instance, destination,
-                                 block_migration, disk_over_commit, migration):
+                                 block_migration, disk_over_commit, migration,
+                                 request_spec=None):
         return live_migrate.LiveMigrationTask(context, instance,
                                               destination, block_migration,
                                               disk_over_commit, migration,
                                               self.compute_rpcapi,
                                               self.servicegroup_api,
-                                              self.scheduler_client)
+                                              self.scheduler_client,
+                                              request_spec)
 
     def _build_cold_migrate_task(self, context, instance, flavor,
                                  filter_properties, request_spec, reservations,
@@ -431,7 +433,7 @@ class ComputeTaskManager(base.Base):
         hosts = self.scheduler_client.select_destinations(context, spec_obj)
         return hosts
 
-    def unshelve_instance(self, context, instance):
+    def unshelve_instance(self, context, instance, request_spec=None):
         sys_meta = instance.system_metadata
 
         def safe_image_show(ctx, image_id):
@@ -469,11 +471,24 @@ class ComputeTaskManager(base.Base):
             try:
                 with compute_utils.EventReporter(context, 'schedule_instances',
                                                  instance.uuid):
-                    filter_properties = {}
+                    if not request_spec:
+                        # NOTE(sbauza): We were unable to find an original
+                        # RequestSpec object - probably because the instance is
+                        # old. We need to mock that the old way
+                        filter_properties = {}
+                        request_spec = scheduler_utils.build_request_spec(
+                            context, image, [instance])
+                    else:
+                        # TODO(sbauza): Provide directly the RequestSpec object
+                        # when _schedule_instances(),
+                        # populate_filter_properties and populate_retry()
+                        # accept it
+                        filter_properties = request_spec.\
+                            to_legacy_filter_properties_dict()
+                        request_spec = request_spec.\
+                            to_legacy_request_spec_dict()
                     scheduler_utils.populate_retry(filter_properties,
                                                    instance.uuid)
-                    request_spec = scheduler_utils.build_request_spec(
-                            context, image, [instance])
                     hosts = self._schedule_instances(
                             context, request_spec, filter_properties)
                     host_state = hosts[0]

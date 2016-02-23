@@ -1527,10 +1527,28 @@ class LibvirtDriver(driver.ComputeDriver):
                              "instance disappeared."),
                          instance=instance)
             else:
-                LOG.error(_LE('detaching network adapter failed.'),
-                         instance=instance, exc_info=True)
-                raise exception.InterfaceDetachFailed(
-                        instance_uuid=instance.uuid)
+                # NOTE(mriedem): When deleting an instance and using Neutron,
+                # we can be racing against Neutron deleting the port and
+                # sending the vif-deleted event which then triggers a call to
+                # detach the interface, so we might have failed because the
+                # network device no longer exists. Libvirt will fail with
+                # "operation failed: no matching network device was found"
+                # which unfortunately does not have a unique error code so we
+                # need to look up the interface by MAC and if it's not found
+                # then we can just log it as a warning rather than tracing an
+                # error.
+                mac = vif.get('address')
+                interface = guest.get_interface_by_mac(mac)
+                if interface:
+                    LOG.error(_LE('detaching network adapter failed.'),
+                             instance=instance, exc_info=True)
+                    raise exception.InterfaceDetachFailed(
+                            instance_uuid=instance.uuid)
+
+                # The interface is gone so just log it as a warning.
+                LOG.warning(_LW('Detaching interface %(mac)s failed  because '
+                                'the device is no longer found on the guest.'),
+                            {'mac': mac}, instance=instance)
 
     def _create_snapshot_metadata(self, image_meta, instance,
                                   img_fmt, snp_name):
@@ -6226,6 +6244,7 @@ class LibvirtDriver(driver.ComputeDriver):
         completion_timeout = int(
             CONF.libvirt.live_migration_completion_timeout * data_gb)
         progress_timeout = CONF.libvirt.live_migration_progress_timeout
+        migration = migrate_data.migration
 
         n = 0
         start = time.time()
@@ -6343,6 +6362,16 @@ class LibvirtDriver(driver.ComputeDriver):
                 # admins see slow running migration operations
                 # when debug logs are off.
                 if (n % 10) == 0:
+                    # Note(Shaohe Feng) every 5 secs to update the migration
+                    # db, that keeps updates to the instance and migration
+                    # objects in sync.
+                    migration.memory_total = info.memory_total
+                    migration.memory_processed = info.memory_processed
+                    migration.memory_remaining = info.memory_remaining
+                    migration.disk_total = info.disk_total
+                    migration.disk_processed = info.disk_processed
+                    migration.disk_remaining = info.disk_remaining
+                    migration.save()
                     # Ignoring memory_processed, as due to repeated
                     # dirtying of data, this can be way larger than
                     # memory_total. Best to just look at what's

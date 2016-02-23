@@ -82,7 +82,7 @@ allocation_ratio_opts = [
              'set on the scheduler node(s) will be used '
              'and defaulted to 1.5'),
     cfg.FloatOpt('disk_allocation_ratio',
-        default=1.0,
+        default=0.0,
         help='This is the virtual disk to physical disk allocation ratio used '
              'by the disk_filter.py script to determine if a host has '
              'sufficient disk space to fit a requested instance. A ratio '
@@ -92,7 +92,10 @@ allocation_ratio_opts = [
              'use the entire virtual disk,such as sparse or compressed '
              'images. It can be set to a value between 0.0 and 1.0 in order '
              'to preserve a percentage of the disk for uses other than '
-             'instances'),
+             'instances.'
+             'NOTE: This can be set per-compute, or if set to 0.0, the value '
+             'set on the scheduler node(s) will be used '
+             'and defaulted to 1.0'),
 ]
 
 
@@ -126,6 +129,9 @@ def _instance_in_resize_state(instance):
     return False
 
 
+_REMOVED_STATES = (vm_states.DELETED, vm_states.SHELVED_OFFLOADED)
+
+
 class ResourceTracker(object):
     """Compute helper class for keeping track of resource usage as instances
     are built and destroyed.
@@ -148,6 +154,7 @@ class ResourceTracker(object):
         self.scheduler_client = scheduler_client.SchedulerClient()
         self.ram_allocation_ratio = CONF.ram_allocation_ratio
         self.cpu_allocation_ratio = CONF.cpu_allocation_ratio
+        self.disk_allocation_ratio = CONF.disk_allocation_ratio
 
     @utils.synchronized(COMPUTE_RESOURCE_SEMAPHORE)
     def instance_claim(self, context, instance_ref, limits=None):
@@ -442,6 +449,7 @@ class ResourceTracker(object):
         # update the allocation ratios for the related ComputeNode object
         self.compute_node.ram_allocation_ratio = self.ram_allocation_ratio
         self.compute_node.cpu_allocation_ratio = self.cpu_allocation_ratio
+        self.compute_node.disk_allocation_ratio = self.disk_allocation_ratio
 
         # now copy rest to compute_node
         self.compute_node.update_from_virt_driver(resources)
@@ -853,20 +861,20 @@ class ResourceTracker(object):
 
         uuid = instance['uuid']
         is_new_instance = uuid not in self.tracked_instances
-        is_deleted_instance = instance['vm_state'] == vm_states.DELETED
+        is_removed_instance = instance['vm_state'] in _REMOVED_STATES
 
         if is_new_instance:
             self.tracked_instances[uuid] = obj_base.obj_to_primitive(instance)
             sign = 1
 
-        if is_deleted_instance:
+        if is_removed_instance:
             self.tracked_instances.pop(uuid)
             sign = -1
 
         self.stats.update_stats_for_instance(instance)
 
         # if it's a new or deleted instance:
-        if is_new_instance or is_deleted_instance:
+        if is_new_instance or is_removed_instance:
             if self.pci_tracker:
                 self.pci_tracker.update_pci_for_instance(context,
                                                          instance,
@@ -905,7 +913,7 @@ class ResourceTracker(object):
                                                    self.driver)
 
         for instance in instances:
-            if instance.vm_state != vm_states.DELETED:
+            if instance.vm_state not in _REMOVED_STATES:
                 self._update_usage_from_instance(context, instance)
 
     def _find_orphaned_instances(self):

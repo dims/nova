@@ -176,6 +176,7 @@ class ComputeNode(BASE, NovaBase, models.SoftDeleteMixin):
     # allocation ratios provided by the RT
     ram_allocation_ratio = Column(Float, nullable=True)
     cpu_allocation_ratio = Column(Float, nullable=True)
+    disk_allocation_ratio = Column(Float, nullable=True)
 
 
 class Certificate(BASE, NovaBase, models.SoftDeleteMixin):
@@ -751,6 +752,12 @@ class Migration(BASE, NovaBase, models.SoftDeleteMixin):
                                  'evacuation'),
                             nullable=True)
     hidden = Column(Boolean, default=False)
+    memory_total = Column(BigInteger, nullable=True)
+    memory_processed = Column(BigInteger, nullable=True)
+    memory_remaining = Column(BigInteger, nullable=True)
+    disk_total = Column(BigInteger, nullable=True)
+    disk_processed = Column(BigInteger, nullable=True)
+    disk_remaining = Column(BigInteger, nullable=True)
 
     instance = orm.relationship("Instance", foreign_keys=instance_uuid,
                             primaryjoin='and_(Migration.instance_uuid == '
@@ -1096,8 +1103,9 @@ class AggregateMetadata(BASE, NovaBase, models.SoftDeleteMixin):
 class Aggregate(BASE, NovaBase, models.SoftDeleteMixin):
     """Represents a cluster of hosts that exists in this zone."""
     __tablename__ = 'aggregates'
-    __table_args__ = ()
+    __table_args__ = (Index('aggregate_uuid_idx', 'uuid'),)
     id = Column(Integer, primary_key=True, autoincrement=True)
+    uuid = Column(String(36))
     name = Column(String(255))
     _hosts = orm.relationship(AggregateHost,
                           primaryjoin='and_('
